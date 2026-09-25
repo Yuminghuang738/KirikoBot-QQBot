@@ -117,7 +117,7 @@ ROBOT1.0_LpwIaw7ngPGxMaqVcn7UcUA4ynteUqeAgkgSfRrwtccWWeLEkWaXOSc.WvNfdNgd1wiKZLP
 
 | 项 | 为什么重要 | 状态 |
 |---|---|---|
-| **全量模式**（`GROUP_MESSAGE_CREATE`，非 @ 的群消息） | **决定群语境 / 活跃统计 / 聊天回看能不能保留** | ❌ **仍未测到** —— 需要确认后台有没有「接收所有消息」开关，并在开着监听时发一条普通消息 |
+| **全量模式**（`GROUP_MESSAGE_CREATE`，非 @ 的群消息） | **决定群语境 / 活跃统计 / 聊天回看能不能保留** | ⏳ 开启方式已找到（见下），待实测确认 |
 | **被动回复超时（>5 分钟）的实际报错** | 决定回复策略 | 待测 |
 | **消息长度上限** | 决定要不要切分 | 待测 |
 | 群聊事件里 `union_user_account` 是否出现 | 只在单聊确认了它缺席 | 群事件里也没有 |
@@ -129,3 +129,26 @@ ROBOT1.0_LpwIaw7ngPGxMaqVcn7UcUA4ynteUqeAgkgSfRrwtccWWeLEkWaXOSc.WvNfdNgd1wiKZLP
 - 面板要加「openid → 显示名」的映射层
 - 「箱头推荐改成按需查询工具」这个决定更重要了 ——
   定时推送没了，箱头库只能靠用户主动问
+
+
+## 关键发现五：全量模式的开关在 QQ 里，不在开发者后台
+
+两次实测都只收到 `GROUP_AT_MESSAGE_CREATE`，翻后台也找不到「接收所有消息」
+的配置项 —— 因为**它根本不在开发者后台**。
+
+官方文档（[群聊消息接收开启](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/group_msg_receive.html)）写的是：
+
+> **群管理员在机器人资料页操作开启通知时触发。**
+> 事件名 `GROUP_MSG_RECEIVE`，Intent 同样是 `GROUP_AND_C2C_EVENT (1<<25)`
+
+也就是说：**由群管理员在 QQ 客户端里打开机器人的资料页、开启通知**。
+开启的瞬间会推一个 `GROUP_MSG_RECEIVE` 事件；之后该群才开始推
+`GROUP_MESSAGE_CREATE`（全部消息）。关闭时对应 `GROUP_MSG_REJECT`。
+
+**对方案的意义**：全量模式**不需要开发者后台审批**，是群管理员的动作 ——
+比原先估计的乐观。只要机器人所在的群开启通知，群语境 / 活跃统计 /
+聊天回看 就都能保留。
+
+顺带：`GROUP_MSG_RECEIVE` / `GROUP_MSG_REJECT` 这两个事件本身也有用 ——
+可以拿来做「本群是否允许机器人看全部消息」的开关状态同步，
+甚至映射成面板里的一个群功能开关。
