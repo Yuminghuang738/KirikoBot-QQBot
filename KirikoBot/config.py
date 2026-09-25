@@ -18,7 +18,6 @@ class Config:
     # 「排除机器人自己」这一个用途，而官方事件里本来就有 author.bot，
     # 所以它变成可选项。
     ROBOT_QQ: Final[str | None] = os.getenv("ROBOT_QQ")
-    ONEBOT_API: Final[str | None] = os.getenv("ONEBOT_API")
     # QQ accounts to exclude from profiling, affection, and data collection
     # (the bot itself + other known bots like QQ's built-in 小冰)
     BOT_QQ_LIST: Final[set[str]] = {
@@ -27,13 +26,8 @@ class Config:
             os.getenv("EXTRA_BOT_QQ", "2854196306"),  # QQ 小冰
         ] if qq
     }
-    ONEBOT_TOKEN: Final[str | None] = os.getenv("ONEBOT_TOKEN")
-    # Shared secret LLBot signs its http-post events with. LLBot (OB11HttpPost)
-    # sends `x-signature: sha1=<HMAC-SHA1(raw body)>` keyed by the token set on
-    # its http-post connection — NOT an Authorization header. Defaults to
-    # ONEBOT_TOKEN so a correctly configured deployment is protected with no
-    # extra setting; set WEBHOOK_TOKEN to use a distinct secret.
-    WEBHOOK_TOKEN: Final[str | None] = os.getenv("WEBHOOK_TOKEN") or os.getenv("ONEBOT_TOKEN")
+    # ONEBOT_API / ONEBOT_TOKEN / WEBHOOK_TOKEN 已删除：入站 webhook 被
+    # WebSocket 网关取代（webhook_auth.py 也没了），没有 HTTP 上报需要鉴权。
     # ── Dashboard access ──────────────────────────────
     # The panel can delete data and drive the QQ account, so it is protected by
     # HTTP Basic auth. Leave DASHBOARD_PASSWORD empty and one is generated on

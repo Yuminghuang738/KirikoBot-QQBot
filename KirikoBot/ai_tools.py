@@ -1322,3 +1322,65 @@ class SimilarStickerTool:
             logger.exception("similar sticker send failed")
             ai.tool_result_text = "发送相似表情失败了，如实说明即可。"
         ai.user_text = ai.tool_result_text
+
+
+# ══════════════════════════════════════════════════════════
+#  Amp head library (on demand)
+# ══════════════════════════════════════════════════════════
+
+class AmpHeadTool:
+    """吉他箱头资料库——**按需**推荐一条。
+
+    以前这是每天定时往群里推一条（`scheduler._build_amp_head` + 推送订阅的
+    `amp_head` 话题）。官方平台没有主动推送，那条路径整个删掉了，于是这个
+    资料库在界面上只剩「箱头库」页能翻。改成工具后，群友直接问就能拿到，
+    资料库也重新有了用处。
+
+    仍然复用 `db.get_amp_head_of_the_day()`：按 day-of-year 在库里轮转，
+    保证一轮之内不重复（比 ORDER BY RANDOM() 好——随机会连着两天抽到同一个，
+    看起来像 bug），而且同一天所有人拿到的是同一个箱头，方便群里聊起来。
+    """
+
+    def __init__(self, db: Any) -> None:
+        self.db = db
+
+    def amp_head_call(self, robot: Any, ai: Any) -> None:
+        tool_calls = ai.ai_message.get("tool_calls")
+        try:
+            head = self.db.get_amp_head_of_the_day()
+        except Exception:
+            logger.exception("amp_head lookup failed")
+            head = None
+
+        if not head:
+            ai.tool_result_text = "箱头资料库里暂时没有可以推荐的条目，如实说一声就行。"
+            _set_tool_meta(ai, tool_calls)
+            ai.user_text = ai.tool_result_text
+            return
+
+        brand = (head.get("brand") or "").strip()
+        model = (head.get("model") or "").strip()
+        name = " ".join(p for p in (brand, model) if p) or "某台箱头"
+
+        lines = [f"今天的箱头：{name}"]
+        # 只列真正有值的字段——资料库是从 Wikipedia 整理的，个别条目会缺项，
+        # 空字段硬写会变成「年份：」这种半截话。
+        labels = [
+            ("year", "年份"), ("origin", "产地"), ("kind", "类型"),
+            ("power", "功率"), ("tubes", "电子管"), ("tone", "音色特点"),
+            ("famous", "用过它的名人"), ("tip", "小贴士"),
+        ]
+        for field, label in labels:
+            val = str(head.get(field) or "").strip()
+            if val:
+                lines.append(f"- {label}：{val}")
+        price = str(head.get("price") or "").strip()
+        if price:
+            # 价格是从公开资料整理的，会随时间变化，必须标明是参考值
+            lines.append(f"- 参考价（约，可能已过时）：{price}")
+        if (head.get("source") or "") == "wikipedia":
+            lines.append("（资料由 Wikipedia 词条整理）")
+
+        ai.tool_result_text = "\n".join(lines)
+        _set_tool_meta(ai, tool_calls)
+        ai.user_text = ai.tool_result_text

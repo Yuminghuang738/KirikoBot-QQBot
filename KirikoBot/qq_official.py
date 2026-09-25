@@ -1,6 +1,7 @@
 """QQ 官方机器人平台客户端。
 
-替代原来的 `llbot_client.py`（OneBot 11 / NapCat）。平台相关的代码
+取代上游分线的 OneBot 客户端（`llbot_client.py`，走 LLBot / NapCat + 一个本地
+登录着的 QQ 客户端），那个文件在本分支已经删除。平台相关的代码
 **全部集中在这一个文件里**，其余业务代码只调这里的方法，不碰 HTTP/WS 细节。
 
 ## 与 OneBot 的三个根本差异

@@ -22,8 +22,11 @@ FEATURE_DEFS: list[dict[str, str]] = [
     {"key": "vision",          "label": "图像识别",     "category": "视觉",     "desc": "理解表情包/图片内容并生成回复"},
     {"key": "sticker_battle",  "label": "斗图模式",     "category": "视觉",     "desc": "表情包对战玩法"},
     {"key": "sticker",         "label": "表情包发送",   "category": "视觉",     "desc": "聊天中发送表情包"},
-    {"key": "sticker_collect", "label": "表情包采集",   "category": "视觉",     "desc": "自动收藏群友发的表情包"},
+    # `sticker_collect`（表情包采集）已删除：被动收集靠监听群里所有消息，
+    # 而官方平台默认收不到非 @ 的群消息。表情库现在是静态的。
     {"key": "music",           "label": "音乐点歌",     "category": "生活娱乐", "desc": "点歌/音乐分享卡片"},
+    # 箱头原来只有「每天定时推一条」，官方平台没有主动推送，所以改成按需工具
+    {"key": "amp_head",        "label": "箱头推荐",     "category": "生活娱乐", "desc": "按需推荐一条吉他箱头资料"},
     {"key": "weather",         "label": "天气查询",     "category": "信息查询", "desc": "查询城市天气"},
     {"key": "tarot",           "label": "塔罗占卜",     "category": "生活娱乐", "desc": "塔罗抽牌和解牌"},
     {"key": "web_search",      "label": "联网搜索",     "category": "信息查询", "desc": "联网搜索网页内容"},
@@ -69,6 +72,7 @@ TOOL_FEATURE: dict[str, str] = {
     "feature_list": "feature_list",
     "explain_self": "explain_self",
     "similar_sticker": "similar_sticker",
+    "amp_head": "amp_head",
 }
 
 

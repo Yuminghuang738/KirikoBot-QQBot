@@ -22,7 +22,7 @@ from ai_tools import (
     StickerBattleTool, BATTLE_DEFAULT_ROUNDS,
     AffectionTool, AffectionLeaderboardTool,
     RecallMessageTool,
-    FeatureListTool, ExplainSelfTool, SimilarStickerTool,
+    FeatureListTool, ExplainSelfTool, SimilarStickerTool, AmpHeadTool,
 )
 from affection_service import AffectionService
 from balance_service import BalanceService
@@ -133,6 +133,7 @@ recall_tool = RecallMessageTool(db, client)
 feature_list_tool = FeatureListTool(db)
 explain_self_tool = ExplainSelfTool(db)
 similar_sticker_tool = SimilarStickerTool(sticker_collector)
+amp_head_tool = AmpHeadTool(db)
 
 # Persist the bot's own outgoing messages so transcripts are complete and
 # "recall the last thing I said" works across restarts.
@@ -198,6 +199,7 @@ ROUTES = {
     "feature_list": feature_list_tool.feature_list_call,
     "explain_self": explain_self_tool.explain_self_call,
     "similar_sticker": similar_sticker_tool.similar_sticker_call,
+    "amp_head": amp_head_tool.amp_head_call,
 }
 
 # Self-contained tools format and send their own reply — no AI follow-up needed
@@ -261,10 +263,9 @@ def _tool_chain_json(tool_calls: Any) -> str:
 def _reply_note(robot: RobotServer) -> str:
     """Describe the quoted message when the incoming one is a reply.
 
-    LLBot's reply segment is only `{"id": ...}` — no text, no sender — so the
-    quoted message is resolved from our own records (bot_messages /
-    group_messages). That lookup is what makes "another user quotes the reply
-    the bot just gave someone else" work at all.
+    官方平台的引用信息带正文和昵称，但昵称认不出「引用的是我自己说给谁的话」。
+    所以被引用的消息还会用我们自己的记录（bot_messages / group_messages）反查一遍
+    —— 那次反查才是「另一个用户引用了机器人刚才说给别人的话」能被识别的关键。
     """
     reply = getattr(robot.incoming, "reply", None)
     if reply is None:
@@ -896,11 +897,7 @@ def _asset_version() -> str:
 
 @app.route("/", methods=["GET"])
 def dashboard():
-    # The LLBot WebUI bridge is gone (OneBot is replaced by the official
-    # platform), but dashboard.html still interpolates this key, so keep
-    # passing an empty value until the frontend drops the WebQQ tab.
-    return render_template("dashboard.html", asset_v=_asset_version(),
-                           llbot_public_url="")
+    return render_template("dashboard.html", asset_v=_asset_version())
 
 @app.route("/status")
 def status():
@@ -1558,8 +1555,8 @@ def api_group_purge_preview(group_id: str):
 def api_group_delete(group_id: str):
     """Remove a group: purge all of its data, optionally make the bot leave.
 
-    Body: {"leave": true} also calls OneBot set_group_leave so the bot exits
-    the QQ group. Leaving is not done implicitly — it cannot be undone from
+    Body: {"leave": true} also makes the bot exit the group through the
+    official API. Leaving is not done implicitly — it cannot be undone from
     here, the bot must be re-invited.
     """
     body = request.get_json(silent=True) or {}
@@ -1569,10 +1566,13 @@ def api_group_delete(group_id: str):
     leave_error = ""
     if leave:
         try:
-            left = bool(client.call("set_group_leave",
-                                   {"group_id": str(group_id), "is_dismiss": False}))
+            # 官方平台的退群接口。这里以前调的是 OneBot 的
+            # `client.call("set_group_leave", ...)`，而 QQOfficialClient 根本没有
+            # `call()` —— AttributeError 被下面的 except 吞掉，于是「删除群聊并让
+            # 机器人退群」会静默地只删数据、不退群。改用官方客户端的 leave_group()。
+            left = bool(client.leave_group(str(group_id)))
             if not left:
-                leave_error = "LLBot 调用失败"
+                leave_error = "官方接口退群失败"
         except Exception as exc:
             leave_error = str(exc)
             logger.exception("Failed to leave group %s", group_id)
@@ -1581,34 +1581,11 @@ def api_group_delete(group_id: str):
                     "left": left, "leave_error": leave_error})
 
 
-@app.route("/api/subscriptions")
-def api_subscriptions():
-    """All push subscriptions (optionally ?group_id=)."""
-    return jsonify({"ok": True,
-                    "topics": list(db.SUBSCRIPTION_TOPICS),
-                    "subscriptions": db.get_subscriptions(request.args.get("group_id") or None)})
-
-
-@app.route("/api/subscriptions", methods=["POST"])
-def api_subscription_set():
-    """Create/update one subscription: {group_id, topic, time, enabled}."""
-    data = request.get_json(silent=True) or {}
-    group_id = str(data.get("group_id") or "").strip()
-    topic = str(data.get("topic") or "").strip()
-    if not group_id or topic not in db.SUBSCRIPTION_TOPICS:
-        return jsonify({"ok": False, "error": "group_id and a valid topic are required"}), 400
-    push_time = str(data.get("time") or "07:00").strip()
-    if not re.match(r"^\d{1,2}:\d{2}$", push_time):
-        return jsonify({"ok": False, "error": "time must look like HH:MM"}), 400
-    db.set_subscription(group_id, topic, push_time=push_time,
-                        enabled=bool(data.get("enabled", True)))
-    return jsonify({"ok": True, "subscriptions": db.get_subscriptions(group_id)})
-
-
-@app.route("/api/subscriptions/<group_id>/<topic>", methods=["DELETE"])
-def api_subscription_delete(group_id: str, topic: str):
-    db.delete_subscription(group_id, topic)
-    return jsonify({"ok": True, "subscriptions": db.get_subscriptions(group_id)})
+# 群推送订阅的三个路由（GET/POST/DELETE /api/subscriptions）已随主动推送一起
+# 删除：订阅靠「到点主动往群里发消息」，而官方平台 2025-04-21 起没有主动推送，
+# 消费它的调度器逻辑 _check_subscriptions 也已移除，留着只会是一组永远不生效的接口。
+# 表 `group_subscriptions` 保留在库里（不 DROP），因为 purge_group 的表清单里还
+# 列着它，旧库也有这张表。
 
 
 @app.route("/api/amp-heads")

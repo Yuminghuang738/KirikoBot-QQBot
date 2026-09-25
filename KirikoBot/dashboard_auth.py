@@ -1,9 +1,8 @@
 """HTTP Basic auth for the KirikoBot dashboard.
 
 The panel is far more powerful than it looks: it can delete a group and all of
-its data, push messages to every QQ group, read every chat log, and (through
-the LLBot bridge) drive the QQ account itself. It therefore must not be
-reachable without a credential.
+its data, read every chat log, and send messages as the bot. It therefore must
+not be reachable without a credential.
 
 Design notes
 ------------

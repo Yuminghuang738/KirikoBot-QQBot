@@ -236,6 +236,17 @@ class AiTools:
             "parameters": empty_params,
         }
 
+        function_amp_head = {
+            "name": "amp_head",
+            "description": (
+                "当用户想了解/推荐吉他音箱箱头（amp head）时调用，"
+                "例如「推荐个箱头」「今天弹什么箱头」「有什么经典的电子管箱头」。"
+                "会从箱头资料库里给出一条，含年份/功率/电子管/音色/参考价等。"
+                "注意：这只是资料推荐，不是购买链接"
+            ),
+            "parameters": empty_params,
+        }
+
         tool_tarot = {"type": "function", "function": function_tarot}
         tool_tarot_history = {"type": "function", "function": function_tarot_history}
         tool_gaming_news = {"type": "function", "function": function_gaming_news}
@@ -259,6 +270,7 @@ class AiTools:
         tool_feature_list = {"type": "function", "function": function_feature_list}
         tool_explain_self = {"type": "function", "function": function_explain_self}
         tool_similar_sticker = {"type": "function", "function": function_similar_sticker}
+        tool_amp_head = {"type": "function", "function": function_amp_head}
 
         return [
             tool_tarot,
@@ -284,4 +296,5 @@ class AiTools:
             tool_feature_list,
             tool_explain_self,
             tool_similar_sticker,
+            tool_amp_head,
         ]

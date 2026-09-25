@@ -1,8 +1,8 @@
 """System-prompt construction for the chat path.
 
 Extracted from ``main.py`` so the persona and context assembly can be unit
-tested without importing ``main`` (which starts the scheduler, the LLBot
-client and the worker pool as import side effects).
+tested without importing ``main`` (which starts the scheduler, the WebSocket
+gateway and the worker pool as import side effects).
 
 ``PERSONA`` is the single source of truth for who Kiriko is and how she talks.
 It lives in code rather than ``.env`` on purpose: ``.env`` is gitignored (so
@@ -254,13 +254,13 @@ def describe_reply(reply: Any, is_own: bool, current_user: str = "") -> str:
 
 def resolve_quote(reply: Any, is_own: bool, lookup: Any = None,
                   current_user: str = "") -> str:
-    """Turn a reply segment into a usable note, filling in what LLBot omits.
+    """Turn a reply segment into a usable note, filling in what the event omits.
 
-    LLBot (as deployed) sends only `{"id": ...}` for a quote — no text and no
-    sender — so `describe_reply` alone produced nothing and quote awareness
-    never fired. `lookup(message_id)` is expected to return
-    `{"text", "user_name", "is_own"}` from our own records; when it finds the
-    message, a quote of the bot's own line is finally recognisable as such.
+    官方平台**收得到**引用信息（`QuoteInfo.text` / `sender_name`），但
+    `sender_name` 是昵称、认不出「这条引用的是我自己说给谁的话」，而且转发/撤回
+    的场景下正文可能是空的。所以 `lookup(message_id)` 仍然要查一遍我们自己的记录
+    （`bot_messages` / `group_messages`）：查到就能把「引用的是机器人自己之前
+    **对某个人**说的话」认出来，这是 `describe_reply` 单独做不到的。
 
     Returns "" when there is nothing worth saying (unknown id, empty message).
     """

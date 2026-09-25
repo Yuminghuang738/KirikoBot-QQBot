@@ -1015,75 +1015,11 @@ class DatabaseManager:
             return ""
         return str(rows[0][0] or "") if rows else ""
 
-    # ── Group push subscriptions ─────────────────────────
-
-    SUBSCRIPTION_TOPICS = ("morning_news", "gaming_news", "hitokoto", "daily_roll_call",
-                           "amp_head")
-
-    def get_subscriptions(self, group_id: str | None = None) -> list[dict[str, Any]]:
-        """Per-group push subscriptions, optionally for one group."""
-        try:
-            if group_id:
-                rows = self.fetch_data(
-                    "SELECT group_id, topic, push_time, enabled, last_fired_date "
-                    "FROM group_subscriptions WHERE group_id = ? ORDER BY topic",
-                    (group_id,),
-                )
-            else:
-                rows = self.fetch_data(
-                    "SELECT group_id, topic, push_time, enabled, last_fired_date "
-                    "FROM group_subscriptions ORDER BY group_id, topic"
-                )
-        except sqlite3.Error:
-            logger.exception("subscription query failed")
-            return []
-        return [
-            {"group_id": r[0], "topic": r[1], "push_time": r[2],
-             "enabled": bool(r[3]), "last_fired_date": r[4]}
-            for r in rows
-        ]
-
-    def set_subscription(self, group_id: str, topic: str,
-                         push_time: str | None = None,
-                         enabled: bool | None = None) -> None:
-        """Create or update one subscription (unspecified fields are kept)."""
-        if topic not in self.SUBSCRIPTION_TOPICS:
-            raise ValueError(f"unknown topic: {topic}")
-        self.execute_action(
-            "INSERT INTO group_subscriptions (group_id, topic, push_time, enabled) "
-            "VALUES (?, ?, ?, ?) "
-            "ON CONFLICT(group_id, topic) DO UPDATE SET "
-            "push_time = COALESCE(?, push_time), "
-            "enabled   = COALESCE(?, enabled)",
-            (group_id, topic, push_time or "07:00", 1 if (enabled is None or enabled) else 0,
-             push_time, None if enabled is None else (1 if enabled else 0)),
-        )
-
-    def delete_subscription(self, group_id: str, topic: str) -> None:
-        self.execute_action(
-            "DELETE FROM group_subscriptions WHERE group_id = ? AND topic = ?",
-            (group_id, topic),
-        )
-
-    def due_subscriptions(self, now_hm: str, today: str) -> list[dict[str, Any]]:
-        """Enabled subscriptions whose time has passed and haven't fired today."""
-        try:
-            rows = self.fetch_data(
-                "SELECT group_id, topic, push_time FROM group_subscriptions "
-                "WHERE enabled = 1 AND push_time <= ? AND last_fired_date != ?",
-                (now_hm, today),
-            )
-        except sqlite3.Error:
-            logger.exception("due subscription query failed")
-            return []
-        return [{"group_id": r[0], "topic": r[1], "push_time": r[2]} for r in rows]
-
-    def mark_subscription_fired(self, group_id: str, topic: str, today: str) -> None:
-        self.execute_action(
-            "UPDATE group_subscriptions SET last_fired_date = ? "
-            "WHERE group_id = ? AND topic = ?",
-            (today, group_id, topic),
-        )
+    # 群推送订阅的读写方法（get_subscriptions / set_subscription /
+    # delete_subscription / due_subscriptions / mark_subscription_fired）已随
+    # 主动推送一起删除：订阅靠「到点主动往群里发消息」，官方平台没有这个能力。
+    # 表 `group_subscriptions` 本身保留（不 DROP）——purge_group 的表清单里还列着它，
+    # 旧库也有这张表，删表会让旧库的整群清除报错。
 
     def get_profile_history(self, user_id: str, group_id: str,
                             limit: int = 3) -> list[dict[str, Any]]:
@@ -1334,7 +1270,13 @@ class DatabaseManager:
     def seed_group_members(
         self, group_id: str, members: list[dict[str, Any]],
     ) -> None:
-        """Cache group member list from LLBot API."""
+        """Cache a group member list.
+
+        以前这些数据来自 OneBot 的成员列表接口。官方平台**没有成员列表接口**
+        （`QQOfficialClient.get_group_member_list` 恒返回空），所以这个缓存现在
+        基本是空的，`find_member_by_name` 只能靠已经记录下来的消息里出现过的昵称
+        来认人。留着这个接口是为了不改调用方签名。
+        """
         self._member_cache[group_id] = [
             {
                 "user_id": str(m.get("user_id", "")),
