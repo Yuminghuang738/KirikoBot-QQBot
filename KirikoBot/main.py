@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 import logging
 import os
@@ -19,13 +17,12 @@ from ai_tools import (
     Tarot, Tarot_History, GamingNews,
     WebSearchTool, WeatherTool, StickerTool,
     HitokotoTool, FoodPickerTool, DiceTool, BilibiliTool,
-    AtMemberTool, ReminderTool, TimeTool, PoliticalNewsTool,
+    TimeTool, PoliticalNewsTool,
     BalanceTool, FeatureRequestTool, MusicTool,
-    ListRemindersTool, DeleteReminderTool,
     StickerBattleTool, BATTLE_DEFAULT_ROUNDS,
     AffectionTool, AffectionLeaderboardTool,
-    RecallMessageTool, GroupStatsTool, ReadContextTool,
-    FeatureListTool, ExplainSelfTool, SimilarStickerTool, VoiceTool,
+    RecallMessageTool,
+    FeatureListTool, ExplainSelfTool, SimilarStickerTool,
 )
 from affection_service import AffectionService
 from balance_service import BalanceService
@@ -38,12 +35,10 @@ from prompt_builder import (
     build_role_prompt,
     deflection_for,
     filler_for,
-    format_group_context,
     leaked_persona,
     resolve_quote,
     build_system_prompt as _build_system_prompt,
     build_user_message as _context,
-    describe_reply,
 )
 from database_manager import DatabaseManager
 from feature_gate import (
@@ -55,9 +50,6 @@ from hot_news import HotNewsScraper
 from judge_service import JudgeService
 from qq_gateway import GatewayClient
 from qq_official import MessageBuilder, QQOfficialClient
-from llbot_webui import llbot_bp
-from msg_package import MsgPackage
-from amp_head_crawler import AmpHeadCrawler
 from news_crawler import NewsCrawler
 from log_stream import sse_handler, setup_sse_logging
 from learning_service import LearningService
@@ -91,7 +83,6 @@ app = Flask(__name__)
 # caching them for the process lifetime (Flask's production default).
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 app.jinja_env.auto_reload = True
-app.register_blueprint(llbot_bp)
 dashboard_auth.init_app(app)
 
 # ── Sticker battle state (must be before services that reference it) ──
@@ -103,55 +94,45 @@ BATTLE_TIMEOUT = 60  # seconds before battle auto-ends
 client = QQOfficialClient(Config.QQ_APP_ID or "", Config.QQ_APP_SECRET or "")
 db = DatabaseManager()
 feature_gate = FeatureGate(db)
-pkg = MsgPackage()
 tools_def = AiTools()
 
-tarot = Tarot(db, pkg)
-tarot_history = Tarot_History(db, pkg)
+tarot = Tarot(db)
+tarot_history = Tarot_History(db)
 news_crawler = NewsCrawler()
-gaming_news = GamingNews(news_crawler, pkg)
+gaming_news = GamingNews(news_crawler)
 web_search = WebSearch()
-web_search_tool = WebSearchTool(web_search, pkg)
-weather_tool = WeatherTool(WeatherService(), pkg)
-sticker_tool = StickerTool(pkg)
-sticker_battle_tool = StickerBattleTool(pkg, client, sticker_tool, _battle_state)
+web_search_tool = WebSearchTool(web_search)
+weather_tool = WeatherTool(WeatherService())
+sticker_tool = StickerTool()
+sticker_battle_tool = StickerBattleTool(client, sticker_tool, _battle_state)
 hitokoto_service = HitokotoService()
-amp_head_crawler = AmpHeadCrawler(db)
-hitokoto_tool = HitokotoTool(hitokoto_service, pkg)
-food_picker_tool = FoodPickerTool(pkg)
-dice_tool = DiceTool(pkg)
-bilibili_tool = BilibiliTool(BilibiliTrending(), pkg)
-at_member_tool = AtMemberTool(pkg, db, client)
-reminder_tool = ReminderTool(db, pkg)
-list_reminders_tool = ListRemindersTool(db, pkg)
-delete_reminder_tool = DeleteReminderTool(db, pkg)
-time_tool = TimeTool(pkg)
+hitokoto_tool = HitokotoTool(hitokoto_service)
+food_picker_tool = FoodPickerTool()
+dice_tool = DiceTool()
+bilibili_tool = BilibiliTool(BilibiliTrending())
+time_tool = TimeTool()
 political_news_scraper = PoliticalNewsScraper()
-political_news_tool = PoliticalNewsTool(political_news_scraper, pkg)
+political_news_tool = PoliticalNewsTool(political_news_scraper)
 balance_service = BalanceService()
-balance_tool = BalanceTool(balance_service, pkg)
-feature_request_tool = FeatureRequestTool(db, pkg)
+balance_tool = BalanceTool(balance_service)
+feature_request_tool = FeatureRequestTool(db)
 music_service = MusicService()
-music_tool = MusicTool(music_service, pkg)
+music_tool = MusicTool(music_service)
 hot_news_scraper = HotNewsScraper()
 
-scheduler = BotScheduler(db, client, political_news_scraper, news_crawler, hitokoto_service, feature_gate,
-                         amp_crawler=amp_head_crawler)
+scheduler = BotScheduler(db, client, feature_gate=feature_gate)
 scheduler.start()
 sticker_collector = StickerCollector(db=db)
 profile_service = ProfileService()
 learning_service = LearningService()
 affection_service = AffectionService()
 judge_service = JudgeService(learning_service)
-affection_tool = AffectionTool(pkg, db)
-affection_leaderboard_tool = AffectionLeaderboardTool(pkg, db)
+affection_tool = AffectionTool(db)
+affection_leaderboard_tool = AffectionLeaderboardTool(db)
 recall_tool = RecallMessageTool(db, client)
-group_stats_tool = GroupStatsTool(db, pkg)
-read_context_tool = ReadContextTool(db, pkg)
-feature_list_tool = FeatureListTool(db, pkg)
-explain_self_tool = ExplainSelfTool(db, pkg)
-voice_tool = VoiceTool(db, pkg, client)
-similar_sticker_tool = SimilarStickerTool(sticker_collector, pkg)
+feature_list_tool = FeatureListTool(db)
+explain_self_tool = ExplainSelfTool(db)
+similar_sticker_tool = SimilarStickerTool(sticker_collector)
 
 # Persist the bot's own outgoing messages so transcripts are complete and
 # "recall the last thing I said" works across restarts.
@@ -162,7 +143,7 @@ client.set_recorder(db.record_bot_message)
 # swallowed inside ai_metrics.
 if Config.AI_METRICS_ENABLED:
     ai_metrics.set_sink(db.record_ai_call)
-version_manager = VersionManager(db, client)
+version_manager = VersionManager(db)
 version_manager.seed_initial_version()
 
 # 安全姿态明说一次：官方平台的防线是「出站 WebSocket + access_token」，
@@ -176,7 +157,6 @@ logger.info(
 think_log = logging.getLogger("think")
 
 executor = ThreadPoolExecutor(max_workers=12)
-sticker_collector.set_executor(executor)
 _seeded_groups: set[str] = set()
 _start_time = time.time()
 
@@ -206,9 +186,6 @@ ROUTES = {
     "request_sticker": _request_sticker_call,
     "hitokoto": hitokoto_tool.hitokoto_call, "food_picker": food_picker_tool.food_picker_call,
     "dice": dice_tool.dice_call, "bilibili_trending": bilibili_tool.bilibili_call,
-    "at_member": at_member_tool.at_member_call, "set_reminder": reminder_tool.set_reminder_call,
-    "list_reminders": list_reminders_tool.list_reminders_call,
-    "delete_reminder": delete_reminder_tool.delete_reminder_call,
     "get_current_time": time_tool.get_current_time_call,
     "political_news": political_news_tool.political_news_call,
     "check_balance": balance_tool.balance_call,
@@ -218,24 +195,19 @@ ROUTES = {
     "check_affection": affection_tool.check_affection_call,
     "affection_leaderboard": affection_leaderboard_tool.affection_leaderboard_call,
     "recall_message": recall_tool.recall_message_call,
-    "group_stats": group_stats_tool.group_stats_call,
-    "read_context": read_context_tool.read_context_call,
     "feature_list": feature_list_tool.feature_list_call,
     "explain_self": explain_self_tool.explain_self_call,
-    "send_voice": voice_tool.voice_call,
     "similar_sticker": similar_sticker_tool.similar_sticker_call,
 }
 
 # Self-contained tools format and send their own reply — no AI follow-up needed
 SELF_CONTAINED_TOOLS = {
-    "tarot", "sticker", "web_search", "at_member",
+    "tarot", "sticker", "web_search",
     "political_news", "gaming_news", "bilibili_trending",
     "hitokoto", "tarot_history", "music_search", "sticker_battle",
     # explain_self sends the raw debug dump itself; a follow-up turn would only
     # add the model's paraphrase on top of the text we want verbatim.
     "explain_self",
-    # send_voice *is* the reply; a follow-up would add a typed duplicate.
-    "send_voice",
 }
 
 # ── History (only recent context, filtered for clarity) ──
@@ -351,37 +323,6 @@ def _mood_signal(robot: RobotServer) -> str:
         line += f"而且你气已经消得差不多了（大约 {Config.MOOD_COOLDOWN_MINUTES} 分钟回到正常），别翻旧账。"
     return line
 
-
-def _ambient_group_context(robot: RobotServer, disabled: set[str]) -> str:
-    """The recent group transcript attached to every group message.
-
-    On by default: the bot only receives messages addressed to it, and leaving
-    the "go read the room" decision to the model meant it almost never
-    happened (read_context: 12 calls vs 1000+ for other tools), so replies
-    kept answering the wrong thing. A person in a group follows the
-    conversation continuously — this is the cheap version of that.
-
-    Reuses the same feature key as the read_context tool, so turning 语境读取
-    off in the panel disables both the background and the tool.
-    """
-    if not Config.GROUP_CONTEXT_ENABLED or robot.msg_type != "group":
-        return ""
-    if "context_read" in disabled or not robot.group_id:
-        return ""
-    try:
-        rows = db.get_recent_group_context(
-            robot.group_id,
-            minutes=Config.GROUP_CONTEXT_MINUTES,
-            limit=Config.GROUP_CONTEXT_LIMIT,
-            # Drop only the message being answered: the author's own earlier
-            # lines are context too, and non-@ messages reach the model no
-            # other way.
-            exclude_message_id=robot.incoming.message_id,
-        )
-    except Exception:
-        logger.debug("ambient group context failed", exc_info=True)
-        return ""
-    return format_group_context(rows, Config.GROUP_CONTEXT_MINUTES)
 
 def _log_thinking(user_name: str, reasoning: str) -> None:
     """Log thinking chain to dedicated logger (visible in logs + frontend)."""
@@ -818,9 +759,7 @@ def main_logic(robot: RobotServer) -> None:
 
         history = _load_history(robot.user_id, robot.group_id)
         is_private = robot.msg_type == "private"
-        user_text = _context(robot, _reply_note(robot),
-                             _ambient_group_context(robot, disabled),
-                             mood=_mood_signal(robot))
+        user_text = _context(robot, _reply_note(robot), mood=_mood_signal(robot))
         system_prompt = _build_system_prompt(
             robot, db, profile_service, learning_service, affection_service, disabled,
         )
@@ -955,18 +894,13 @@ def _asset_version() -> str:
     return str(int(latest)) or "1"
 
 
-def _llbot_public_url() -> str:
-    """Where the browser loads the LLBot WebUI from (embedded WebQQ tab)."""
-    if Config.LLBOT_WEBUI_PUBLIC_URL:
-        return Config.LLBOT_WEBUI_PUBLIC_URL.rstrip("/")
-    host = (request.host or "").split(":")[0] or "localhost"
-    return f"{request.scheme}://{host}:3080"
-
-
 @app.route("/", methods=["GET"])
 def dashboard():
+    # The LLBot WebUI bridge is gone (OneBot is replaced by the official
+    # platform), but dashboard.html still interpolates this key, so keep
+    # passing an empty value until the frontend drops the WebQQ tab.
     return render_template("dashboard.html", asset_v=_asset_version(),
-                           llbot_public_url=_llbot_public_url())
+                           llbot_public_url="")
 
 @app.route("/status")
 def status():
@@ -980,6 +914,8 @@ def status():
     return jsonify({"ok": True, "model": Config.DEEPSEEK_MODEL, "thinking": "enabled",
                     "tools": len(tools_def.ai_tools()), "groups": len(_seeded_groups),
                     "uptime": uptime_sec,
+                    "app_id": Config.QQ_APP_ID,
+                    "gateway": gateway.status if gateway else None,
                     "scheduler": scheduler._running, "stickers": sticker_count})
 
 @app.route("/stream")
@@ -1257,9 +1193,8 @@ def api_versions_create():
         return jsonify({"ok": False, "error": "Version must be in format X.Y.Z (e.g. 1.0.0)"}), 400
     description = data.get("description", "")
     author = data.get("author", "dashboard")
-    notify = data.get("notify", True)
     try:
-        result = version_manager.create_version(version, description, author, notify=notify)
+        result = version_manager.create_version(version, description, author)
         return jsonify({"ok": True, "version": result})
     except Exception:
         logger.exception("Failed to create version %s", version)
@@ -1287,198 +1222,15 @@ def api_changelog_create():
         return jsonify({"ok": False, "error": "entry_type must be one of: feature, fix, improve, breaking"}), 400
     try:
         entry = version_manager.add_changelog(version_id, entry_type, title, description, author)
-        # Notify groups about the new changelog entry
-        try:
-            executor.submit(version_manager.notify_changelog_entry, entry)
-        except Exception:
-            logger.debug("main.api_changelog_create 忽略了异常", exc_info=True)
         return jsonify({"ok": True, "entry": entry})
     except Exception:
         logger.exception("Failed to create changelog entry")
         return jsonify({"ok": False, "error": "Database insert failed"}), 500
 
-# ── Manual push notification ─────────────────────────
-
-@app.route("/api/changelog/<int:entry_id>/push", methods=["POST"])
-def api_changelog_push(entry_id: int):
-    """Manually push a changelog entry notification to all groups."""
-    rows = db.fetch_data(
-        "SELECT id, version_id, entry_type, title, description, author, created_at "
-        "FROM changelog WHERE id = ?", (entry_id,)
-    )
-    if not rows:
-        return jsonify({"ok": False, "error": "Changelog entry not found"}), 404
-    r = rows[0]
-    entry = {
-        "id": r[0], "version_id": r[1], "entry_type": r[2],
-        "title": r[3], "description": r[4], "author": r[5],
-        "created_at": r[6],
-    }
-    try:
-        version_manager.notify_changelog_entry(entry)
-        return jsonify({"ok": True, "pushed": entry["title"]})
-    except Exception:
-        logger.exception("Failed to push changelog entry #%d", entry_id)
-        return jsonify({"ok": False, "error": "Push failed"}), 500
-
-@app.route("/api/versions/<int:version_id>/push", methods=["POST"])
-def api_version_push(version_id: int):
-    """Manually push a version release notification to all groups."""
-    detail = version_manager.get_version_detail(version_id)
-    if not detail:
-        return jsonify({"ok": False, "error": "Version not found"}), 404
-    try:
-        version_manager.notify_version_release(detail)
-        return jsonify({"ok": True, "pushed": detail["version"]})
-    except Exception:
-        logger.exception("Failed to push version #%d", version_id)
-        return jsonify({"ok": False, "error": "Push failed"}), 500
-
-# ── New Feature Digest Push ──────────────────────────
-
-@app.route("/api/digest/push", methods=["POST"])
-def api_digest_push():
-    """Push a new-feature digest to all active groups. Only pushes current version once."""
-    current = version_manager.get_current_version()
-    if not current:
-        return jsonify({"ok": False, "error": "No version found"}), 404
-    version_id = current["id"]
-    version_str = current["version"]
-
-    # Check if digest was already sent for this version
-    rows = db.fetch_data(
-        "SELECT digest_sent FROM app_versions WHERE id = ?", (version_id,)
-    )
-    if rows and rows[0][0]:
-        return jsonify({"ok": False, "error": f"版本 v{version_str} 已推送过速递，无需重复推送"}), 400
-
-    # Get feature-type changelogs from current version ONLY
-    features = version_manager.get_changelogs(version_id=version_id, entry_type="feature")
-    # Get feature requests completed since this version
-    version_created_at = current.get("created_at", "")
-    try:
-        if version_created_at:
-            fr_rows = db.fetch_data(
-                "SELECT request_text, ai_summary, user_name FROM feature_requests "
-                "WHERE status='done' AND timestamp >= ? ORDER BY id DESC LIMIT 10",
-                (version_created_at,)
-            )
-        else:
-            fr_rows = []
-        completed_requests = [{"request": r[0], "summary": r[1], "user_name": r[2]} for r in fr_rows]
-    except Exception:
-        completed_requests = []
-
-    # Build digest message
-    lines = [
-        "📬 KirikoBot 新功能速递！",
-        "",
-        f"📦 版本：v{version_str}",
-        f"📅 日期：{current.get('release_date', '')}",
-        "",
-    ]
-
-    if features:
-        lines.append("🎉 本次更新内容：")
-        for i, f in enumerate(features, 1):
-            title = f.get("title", "未知")
-            desc = f.get("description", "")
-            if desc.startswith("来自 "):
-                parts = desc.split("的需求：", 1)
-                if len(parts) == 2:
-                    desc = parts[1].strip()
-            if desc and len(desc) > 80:
-                desc = desc[:80] + "…"
-            line = f"  {i}. {title}"
-            if desc:
-                line += f" — {desc}"
-            lines.append(line)
-        lines.append("")
-
-    if completed_requests:
-        lines.append("✅ 近期完成的功能需求：")
-        for i, cr in enumerate(completed_requests[:5], 1):
-            lines.append(f"  {i}. {cr['summary'] or cr['request'][:20]}（来自 {cr['user_name'] or '群友'}）")
-        lines.append("")
-
-    lines.append("感谢大家对 KirikoBot 的支持！(◕‿◕✿)")
-    lines.append("有什么想法欢迎 @ 我提建议哦～")
-
-    message = "\n".join(lines)
-
-    # Send to all active groups
-    groups = version_manager._get_active_group_ids()
-    success = 0
-    for gid in groups:
-        try:
-            from qq_official import MessageBuilder
-            builder = MessageBuilder()
-            builder.text(message)
-            client.send_group_msg(gid, builder.build())
-            success += 1
-        except Exception:
-            logger.exception("Failed to send digest to group %s", gid)
-
-    # Mark digest as sent
-    try:
-        db.execute_action("UPDATE app_versions SET digest_sent = 1 WHERE id = ?", (version_id,))
-    except Exception:
-        logger.debug("main.api_digest_push 忽略了异常", exc_info=True)
-
-    logger.info("Feature digest pushed: v%s to %d/%d groups", version_str, success, len(groups))
-    return jsonify({"ok": True, "pushed": success, "total_groups": len(groups),
-                    "version": version_str, "features_count": len(features)})
-
 @app.route("/api/messages")
 def api_messages():
     rows = db.get_recent_group_messages("", 100)
     return jsonify({"records": [{"user_id": r[0], "user_name": r[1], "content": r[2][:100], "time": r[3]} for r in rows]})
-
-@app.route("/api/reminders")
-def api_reminders():
-    rows = db.fetch_data("SELECT id, user_id, group_id, user_name, content, remind_time, fired, repeat_daily FROM reminders ORDER BY remind_time")
-    return jsonify({"reminders": [{"id": r[0], "user_id": r[1], "group_id": r[2], "user_name": r[3],
-                                   "content": r[4], "remind_time": r[5], "fired": bool(r[6]),
-                                   "repeat_daily": bool(r[7])} for r in rows]})
-
-@app.route("/api/reminders/<int:reminder_id>", methods=["DELETE"])
-def api_reminders_delete(reminder_id: int):
-    try:
-        db.execute_action("DELETE FROM reminders WHERE id = ?", (reminder_id,))
-        return jsonify({"ok": True, "deleted": reminder_id})
-    except Exception:
-        logger.exception("Failed to delete reminder #%d", reminder_id)
-        return jsonify({"ok": False, "error": "Database delete failed"}), 500
-
-@app.route("/api/reminders", methods=["POST"])
-def api_reminders_create():
-    data = request.get_json(silent=True) or {}
-    content = (data.get("content") or "").strip()
-    remind_time = (data.get("remind_time") or "").strip()
-    repeat_daily = int(data.get("repeat_daily", False) or False)
-    user_name = data.get("user_name", "dashboard")
-    user_id = data.get("user_id", "admin")
-    group_id = data.get("group_id") or None
-    if not content or not remind_time:
-        return jsonify({"ok": False, "error": "content and remind_time are required"}), 400
-    from datetime import datetime
-    try:
-        rt = datetime.strptime(remind_time, "%Y-%m-%d %H:%M:%S")
-        if rt <= datetime.now():
-            return jsonify({"ok": False, "error": "提醒时间不能是过去的时间"}), 400
-    except ValueError:
-        return jsonify({"ok": False, "error": "时间格式错误，请使用 YYYY-MM-DD HH:MM:SS"}), 400
-    try:
-        db.deposit(
-            "reminders",
-            "(user_id, group_id, user_name, content, remind_time, repeat_daily)",
-            "(?, ?, ?, ?, ?, ?)",
-            (user_id, group_id, user_name, content, remind_time, repeat_daily),
-        )
-        return jsonify({"ok": True, "created": {"content": content, "remind_time": remind_time, "repeat_daily": bool(repeat_daily)}})
-    except Exception:
-        logger.exception("Failed to create reminder")
-        return jsonify({"ok": False, "error": "Database insert failed"}), 500
 
 @app.route("/api/balance")
 def api_balance():
@@ -1487,24 +1239,14 @@ def api_balance():
 
 @app.route("/api/scheduler")
 def api_scheduler():
-    from datetime import datetime
-    now = datetime.now()
-    next_morning = now.replace(hour=7, minute=0, second=0, microsecond=0)
-    if now >= next_morning:
-        next_morning = next_morning.replace(day=now.day + 1) if now.month == next_morning.month else now
-    return jsonify({"running": scheduler._running, "check_interval": scheduler.CHECK_INTERVAL,
-                    "last_morning": scheduler._last_morning,
-                    "active_groups": scheduler._get_active_groups(),
-                    "next_morning": next_morning.strftime("%Y-%m-%d %H:%M")})
+    """Background scheduler status.
 
-@app.route("/api/scheduler/morning", methods=["POST"])
-def api_scheduler_morning():
-    try:
-        executor.submit(scheduler._morning_greeting)
-        return jsonify({"ok": True, "msg": "Morning greeting triggered"})
-    except Exception:
-        logger.exception("Failed to trigger morning greeting")
-        return jsonify({"ok": False, "error": "Failed to trigger"}), 500
+    提醒 / 早间问候 / 群推送订阅都随官方平台的主动推送一起删除了，
+    现在的调度器只剩每日的保留策略与数据库备份，所以不再有「下次早安」
+    之类的时间点信息。
+    """
+    return jsonify({"running": scheduler._running,
+                    "check_interval": scheduler.CHECK_INTERVAL})
 
 @app.route("/api/stickers")
 def api_stickers():
@@ -1839,56 +1581,6 @@ def api_group_delete(group_id: str):
                     "left": left, "leave_error": leave_error})
 
 
-# ── Group activity & transcript (dashboard) ─────────────
-
-@app.route("/api/groups/<group_id>/stats")
-def api_group_stats(group_id: str):
-    """One day of activity for a group. ?date=YYYY-MM-DD (default today)."""
-    day = request.args.get("date") or None
-    return jsonify({"ok": True, "group_id": group_id,
-                    "stats": db.get_daily_group_stats(group_id, day)})
-
-
-@app.route("/api/groups/<group_id>/threads")
-def api_group_threads(group_id: str):
-    """Transcript clustered into topic threads. ?date=&gap= (minutes)."""
-    try:
-        gap = int(request.args.get("gap", 10))
-    except ValueError:
-        gap = 10
-    threads = db.get_group_threads(group_id, day=request.args.get("date") or None,
-                                   max_gap_minutes=gap)
-    return jsonify({"ok": True, "group_id": group_id, "threads": threads})
-
-
-@app.route("/api/groups/<group_id>/days")
-def api_group_days(group_id: str):
-    """Days that have messages, for the review page's date picker."""
-    return jsonify({"ok": True, "days": db.get_group_days(group_id)})
-
-
-@app.route("/api/groups/<group_id>/messages")
-def api_group_messages(group_id: str):
-    """Paginated group transcript. Includes the bot's own lines."""
-    try:
-        page = int(request.args.get("page", 1))
-    except ValueError:
-        page = 1
-    try:
-        size = int(request.args.get("size", 100))
-    except ValueError:
-        size = 100
-    result = db.get_group_message_page(
-        group_id,
-        day=request.args.get("date") or None,
-        keyword=(request.args.get("q") or "").strip(),
-        user_name=(request.args.get("user") or "").strip(),
-        page=page,
-        size=size,
-    )
-    return jsonify({"ok": True, "group_id": group_id, **result})
-
-
 @app.route("/api/subscriptions")
 def api_subscriptions():
     """All push subscriptions (optionally ?group_id=)."""
@@ -1946,36 +1638,6 @@ def api_amp_head_delete(head_id: int):
     except Exception:
         logger.exception("Failed to delete amp head #%d", head_id)
         return jsonify({"ok": False, "error": "Database delete failed"}), 500
-
-
-@app.route("/api/amp-heads/crawl", methods=["POST"])
-def api_amp_head_crawl():
-    """Crawl Wikipedia now, in the background (it is throttled and slow)."""
-    if db.get_state("amp_crawl_running") == "1":
-        return jsonify({"ok": False, "error": "已有抓取任务在跑"}), 409
-    data = request.get_json(silent=True) or {}
-    try:
-        limit = max(1, min(int(data.get("limit", 8)), 30))
-    except (TypeError, ValueError):
-        limit = 8
-
-    def _run() -> None:
-        from datetime import datetime as _dt
-
-        from amp_head_crawler import AmpHeadCrawler
-
-        db.set_state("amp_crawl_running", "1")
-        try:
-            summary = AmpHeadCrawler(db).crawl(limit=limit)
-            db.set_state("amp_crawl_last", _dt.now().strftime("%Y-%m-%d %H:%M:%S"))
-            logger.info("Manual amp crawl finished: %s", summary)
-        except Exception:
-            logger.exception("Manual amp crawl failed")
-        finally:
-            db.set_state("amp_crawl_running", "0")
-
-    threading.Thread(target=_run, daemon=True, name="amp-crawl-manual").start()
-    return jsonify({"ok": True, "started": True, "limit": limit})
 
 
 @app.route("/api/ai/metrics")

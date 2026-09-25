@@ -96,7 +96,7 @@ class TestTheToolHonoursTheLimit:
         seed_card(db)
         db.deposit_tarot_history("u1", "愚者_正位")
 
-        tool = Tarot(db, None)
+        tool = Tarot(db)
         drawn = []
         monkeypatch.setattr(tool, "_draw_card",
                             lambda: drawn.append(1) or {"card_name": "世界_正位",
@@ -132,7 +132,7 @@ class TestTheToolHonoursTheLimit:
         from ai_tools import Tarot
 
         seed_card(db)
-        tool = Tarot(db, None)
+        tool = Tarot(db)
         resent = []
         monkeypatch.setattr(tool, "_resend_today", lambda *a, **k: resent.append(1))
         monkeypatch.setattr(tool, "_draw_card",
@@ -157,7 +157,7 @@ class TestTheToolHonoursTheLimit:
 
         seed_card(db)
         db.deposit_tarot_history("u1", "愚者_正位")
-        tool = Tarot(db, None)
+        tool = Tarot(db)
         ai = self._AI()
 
         class LLBot:

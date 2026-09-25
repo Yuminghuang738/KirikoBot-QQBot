@@ -4,17 +4,19 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from qq_official import MessageBuilder
-
 logger = logging.getLogger(__name__)
 
 
 class VersionManager:
-    """Manage app versions, changelog entries, and group notifications."""
+    """Manage app versions and changelog entries.
 
-    def __init__(self, db: Any, client: Any) -> None:
+    版本管理与变更日志本身只是记录（写库 + 写 VERSION 文件）。原来每次记
+    版本都会顺带把更新推送到所有 QQ 群，但官方平台没有主动推送，留着只会
+    每次都发送失败，所以整套「群通知」已删除。
+    """
+
+    def __init__(self, db: Any) -> None:
         self.db = db
-        self.client = client
 
     # ── Current version ─────────────────────────────────
 
@@ -53,9 +55,8 @@ class VersionManager:
 
     def create_version(
         self, version: str, description: str = "", author: str = "developer",
-        notify: bool = True,
     ) -> dict[str, Any]:
-        """Create a new version record. Writes VERSION file and notifies groups."""
+        """Create a new version record and write the VERSION file."""
         release_date = datetime.now().strftime("%Y-%m-%d")
 
         self.db.deposit(
@@ -82,10 +83,6 @@ class VersionManager:
             "release_date": release_date, "description": description,
             "author": author,
         }
-
-        # Notify groups
-        if notify:
-            self.notify_version_release(result)
 
         return result
 
@@ -195,21 +192,18 @@ class VersionManager:
         self, feature_request: str, feature_summary: str, user_name: str,
     ) -> None:
         """Automatically add a changelog entry when a feature request is completed.
-        Appends to the latest version if one exists, and notifies all QQ groups."""
+        Appends to the latest version if one exists."""
         current = self.get_current_version()
         if not current:
             return
         try:
-            entry = self.add_changelog(
+            self.add_changelog(
                 version_id=current["id"],
                 entry_type="feature",
                 title=feature_summary or feature_request[:30],
                 description=f"来自 {user_name} 的需求：{feature_request[:200]}",
                 author=user_name,
             )
-            # Notify all active QQ groups about the new feature
-            if entry:
-                self.notify_changelog_entry(entry)
         except Exception:
             logger.exception("Failed to auto-add changelog for feature completion")
 
@@ -237,168 +231,6 @@ class VersionManager:
 
         new_version = ".".join(str(p) for p in parts)
         return new_version
-
-    # ── Group notification ──────────────────────────────
-
-    def _get_active_group_ids(self) -> list[str]:
-        """Get all distinct group IDs from recorded messages."""
-        try:
-            rows = self.db.fetch_data(
-                "SELECT DISTINCT group_id FROM group_messages WHERE group_id IS NOT NULL"
-            )
-            return [r[0] for r in rows if r[0]]
-        except Exception:
-            return []
-
-    def notify_version_release(self, version_info: dict[str, Any]) -> None:
-        """Send version release notification to all active QQ groups."""
-        groups = self._get_active_group_ids()
-        if not groups:
-            logger.info("No active groups to notify for version %s", version_info.get("version"))
-            return
-
-        version = version_info.get("version", "?")
-        release_date = version_info.get("release_date", "")
-        description = version_info.get("description", "")
-        version_id = version_info.get("id", 0)
-
-        # Get changelogs for this version
-        changelogs = self.get_changelogs(version_id=version_id)
-
-        # Build message
-        lines = [
-            f"📦 KirikoBot 更新啦！",
-            f"",
-            f"版本：v{version}  |  日期：{release_date}",
-        ]
-        if description:
-            lines.append(f"更新说明：{description}")
-
-        if changelogs:
-            # Group by type
-            groups_by_type: dict[str, list[dict[str, Any]]] = {}
-            for c in changelogs:
-                groups_by_type.setdefault(c["entry_type"], []).append(c)
-
-            type_emoji = {
-                "feature": ("🎉 新功能", "+"),
-                "fix": ("🔧 修复", "-"),
-                "improve": ("💡 改进", "*"),
-                "breaking": ("⚠️ 重大变更", "!"),
-            }
-
-            for entry_type in ("feature", "improve", "fix", "breaking"):
-                entries = groups_by_type.get(entry_type, [])
-                if not entries:
-                    continue
-                emoji_label, bullet = type_emoji.get(entry_type, ("📌", "•"))
-                lines.append(f"")
-                lines.append(f"{emoji_label}：")
-                for e in entries:
-                    title = e["title"]
-                    desc = e.get("description", "")
-                    # Clean description
-                    if desc.startswith("来自 "):
-                        parts = desc.split("的需求：", 1)
-                        if len(parts) == 2:
-                            desc = parts[1].strip()
-                    if desc:
-                        lines.append(f"  {bullet} {title} — {desc[:80]}")
-                    else:
-                        lines.append(f"  {bullet} {title}")
-
-        lines.append(f"")
-        lines.append(f"感谢使用 KirikoBot！(◕‿◕✿)")
-
-        message = "\n".join(lines)
-        success_count = 0
-
-        for gid in groups:
-            try:
-                builder = MessageBuilder()
-                builder.text(message)
-                self.client.send_group_msg(gid, builder.build())
-                success_count += 1
-                logger.info("Version notification sent to group %s", gid)
-            except Exception:
-                logger.exception("Failed to send version notification to group %s", gid)
-
-        logger.info(
-            "Version %s notification sent to %d/%d groups",
-            version, success_count, len(groups),
-        )
-
-    def _build_changelog_message(self, entry: dict[str, Any], version: str) -> str:
-        """Build a clean, AI-summary-style notification message from a changelog entry."""
-        entry_type = entry.get("entry_type", "feature")
-        emoji_map = {
-            "feature": ("🎉 新功能上线", "✨"),
-            "fix": ("🔧 问题修复", "🛠️"),
-            "improve": ("💡 功能改进", "📈"),
-            "breaking": ("⚠️ 重要变更", "📢"),
-        }
-        label, icon = emoji_map.get(entry_type, ("📌 更新", "•"))
-
-        title = entry.get("title", "未知更新")
-        description = entry.get("description", "")
-
-        lines = [
-            f"{label}：{title}",
-        ]
-
-        if description:
-            # Clean up the description — remove raw "来自 XXX 的需求：" prefix
-            desc = description
-            # If it's a feature request style, make it more natural
-            if desc.startswith("来自 "):
-                # Extract just the feature description
-                parts = desc.split("的需求：", 1)
-                if len(parts) == 2:
-                    desc = f"群友建议：{parts[1].strip()}"
-            lines.append(f"")
-            lines.append(f"{desc[:200]}")
-
-        lines.append(f"")
-        lines.append(f"📦 版本：v{version}")
-        lines.append(f"感谢大家对 KirikoBot 的支持！{icon}")
-
-        return "\n".join(lines)
-
-    def notify_changelog_entry(self, entry: dict[str, Any]) -> None:
-        """Send a single changelog entry notification to all active QQ groups."""
-        groups = self._get_active_group_ids()
-        if not groups:
-            logger.info("No active groups to notify for changelog entry '%s'", entry.get("title"))
-            return
-
-        # Get the version string
-        version = ""
-        try:
-            rows = self.db.fetch_data(
-                "SELECT version FROM app_versions WHERE id = ?", (entry.get("version_id", 0),)
-            )
-            if rows:
-                version = rows[0][0]
-        except Exception:
-            logger.debug("version_manager.notify_changelog_entry 忽略了异常", exc_info=True)
-
-        message = self._build_changelog_message(entry, version or "?")
-
-        success_count = 0
-        for gid in groups:
-            try:
-                builder = MessageBuilder()
-                builder.text(message)
-                self.client.send_group_msg(gid, builder.build())
-                success_count += 1
-                logger.info("Changelog notification sent to group %s", gid)
-            except Exception:
-                logger.exception("Failed to send changelog notification to group %s", gid)
-
-        logger.info(
-            "Changelog notification '%s' sent to %d/%d groups",
-            entry.get("title"), success_count, len(groups),
-        )
 
     # ── Seed initial version ────────────────────────────
 

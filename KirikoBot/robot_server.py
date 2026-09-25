@@ -78,17 +78,3 @@ class RobotServer:
         """Send image as reply."""
         return self.client.reply_image(self.incoming, path)
 
-    def send_group(self) -> bool:
-        """Compat: send via msg_list attr (used by old MsgPackage flow)."""
-        if not hasattr(self, "msg_list") or not self.msg_list:
-            return False
-        if self.msg_type == "group":
-            return self.client.send_group_msg(self.group_id or "", self.msg_list)
-        else:
-            return self.client.send_private_msg(self.user_id, self.msg_list)
-
-    def send_private(self) -> bool:
-        """Compat: send private via msg_list."""
-        if not hasattr(self, "msg_list") or not self.msg_list:
-            return False
-        return self.client.send_private_msg(self.user_id, self.msg_list)

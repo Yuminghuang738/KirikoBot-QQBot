@@ -1,4 +1,4 @@
-"""Security-relevant behaviour: webhook signatures and output escaping."""
+"""Security-relevant behaviour: dashboard auth exemptions and output escaping."""
 from __future__ import annotations
 
 import logging
@@ -7,7 +7,6 @@ import os
 import pytest
 
 from conftest import APP_DIR
-from webhook_auth import expected_signature, signature_ok
 
 PROJECT_DIR = os.path.dirname(APP_DIR)
 
@@ -39,37 +38,6 @@ class TestAuthExemptions:
         assert "/healthz" in compose
         assert "http://localhost:5000/healthz" in compose
 
-
-class TestWebhookSignature:
-    BODY = b'{"post_type":"message","user_id":123}'
-
-    def test_accepts_valid_signature(self):
-        sig = expected_signature("s3cret", self.BODY)
-        assert sig.startswith("sha1=")
-        assert signature_ok("s3cret", self.BODY, sig)
-
-    def test_rejects_tampered_body(self):
-        sig = expected_signature("s3cret", self.BODY)
-        assert not signature_ok("s3cret", self.BODY + b" ", sig)
-
-    def test_rejects_wrong_token(self):
-        sig = expected_signature("s3cret", self.BODY)
-        assert not signature_ok("other", self.BODY, sig)
-
-    def test_rejects_missing_signature(self):
-        assert not signature_ok("s3cret", self.BODY, None)
-        assert not signature_ok("s3cret", self.BODY, "")
-
-    def test_open_when_no_token_configured(self):
-        # Backwards compatibility: an unconfigured token must not take a
-        # running bot offline (main logs a loud warning instead).
-        assert signature_ok(None, self.BODY, None)
-        assert signature_ok("", self.BODY, "garbage")
-
-    def test_signature_is_over_raw_bytes(self):
-        pretty = b'{"a": 1}'
-        compact = b'{"a":1}'
-        assert expected_signature("k", pretty) != expected_signature("k", compact)
 
 
 class TestLogEscaping:

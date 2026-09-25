@@ -116,36 +116,8 @@ class TestReplyLength:
 
     def test_long_is_allowed_when_actually_needed(self):
         section = PERSONA[PERSONA.index("【怎么说话】"):]
-        section = section[:section.index("【有时候你会直接说话】")]
+        section = section[:section.index("【情绪是渐进式的】")]
         assert "只有明确要长内容" in section
-
-
-class TestVoiceIsInThePersona:
-    def test_there_is_a_voice_section(self):
-        assert "【有时候你会直接说话】" in PERSONA
-
-    def test_the_tool_is_named(self):
-        section = PERSONA[PERSONA.index("【有时候你会直接说话】"):]
-        section = section[:section.index("【情绪是渐进式的】")]
-        assert "send_voice" in section
-
-    def test_spoken_text_is_different_from_written_text(self):
-        """The model must write for the ear, not the eye."""
-        section = PERSONA[PERSONA.index("【有时候你会直接说话】"):]
-        section = section[:section.index("【情绪是渐进式的】")]
-        assert "怎么说出来" in section
-        assert "别带颜文字" in section
-
-    def test_it_says_when_not_to_speak(self):
-        section = PERSONA[PERSONA.index("【有时候你会直接说话】"):]
-        section = section[:section.index("【情绪是渐进式的】")]
-        assert "打字" in section
-        assert "数字/链接" in section
-
-    def test_it_warns_against_overusing_voice(self):
-        section = PERSONA[PERSONA.index("【有时候你会直接说话】"):]
-        section = section[:section.index("【情绪是渐进式的】")]
-        assert "别为了用语音而用语音" in section
 
 
 class TestPesteringSignal:

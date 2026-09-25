@@ -22,15 +22,6 @@ VALID_TABLES = {
 }
 
 
-def _thread_title(messages: list[dict[str, Any]]) -> str:
-    """A short label for a thread — first non-empty member line."""
-    for m in messages:
-        text = (m.get("content") or "").strip()
-        if text and not m.get("is_bot"):
-            return text[:24] + ("…" if len(text) > 24 else "")
-    return "(机器人发言)"
-
-
 class DatabaseManager:
     def __init__(self, db_file: str = "robot.db") -> None:
         self.db_file = db_file
@@ -113,6 +104,91 @@ class DatabaseManager:
         )
         connect.execute("DROP TABLE user_profiles_old")
         logger.info("user_profiles migration done")
+
+    @staticmethod
+    def _column_declared_type(connect: sqlite3.Connection, table: str, column: str) -> str:
+        """Declared type of one column, uppercase, or "" when absent/unknown."""
+        try:
+            rows = connect.execute(f"PRAGMA table_info({table})").fetchall()
+        except sqlite3.Error:
+            return ""
+        for r in rows:
+            if r[1] == column:
+                return str(r[2] or "").upper()
+        return ""
+
+    @classmethod
+    def _migrate_message_id_to_text(cls, connect: sqlite3.Connection) -> None:
+        """Rebuild tables whose `message_id` is still declared INTEGER.
+
+        QQ 官方平台的消息 id 是形如 ``ROBOT1.0_xxx.yyy!zzz`` 的字符串（含 ``.``
+        和 ``!``），不是数字。旧库把 ``message_id`` 声明成 INTEGER；读取路径里
+        的 ``int(message_id)`` 会 ValueError，然后被 except 吞成「没找到」——
+        症状是引用感知静默失效，而不是报错。
+
+        SQLite 不能修改列类型，而 ``ALTER TABLE ... ADD COLUMN`` 对已存在的列
+        是 no-op，所以只能整表重建：按新 schema 建临时表 → 原样搬数据 →
+        换名。数据不做任何转换：老库里存的整数 id 搬进 TEXT 列后会按亲和性
+        以文本形式存储，查询参数（无论 int 还是 str）也会被亲和性统一成文本
+        再比较，所以老数据不会失效。
+        """
+        cls._rebuild_message_id_table(
+            connect,
+            table="group_messages",
+            create_sql="""CREATE TABLE group_messages(
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_id     TEXT NOT NULL,
+                user_id      TEXT NOT NULL,
+                user_name    TEXT NOT NULL,
+                user_role    TEXT DEFAULT '',
+                content      TEXT NOT NULL,
+                msg_type     TEXT DEFAULT 'text',
+                timestamp    DATETIME DEFAULT (datetime('now', 'localtime')),
+                message_id   TEXT,
+                message_seq  INTEGER,
+                reply_to_seq INTEGER,
+                ts_exact     REAL
+            )""",
+            drop_indexes=("idx_gm_user",),
+        )
+        cls._rebuild_message_id_table(
+            connect,
+            table="bot_messages",
+            create_sql="""CREATE TABLE bot_messages(
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_id       TEXT NOT NULL,
+                target_user_id TEXT DEFAULT '',
+                message_id     TEXT,
+                text           TEXT DEFAULT '',
+                recalled       INTEGER DEFAULT 0,
+                ts_exact       REAL,
+                created_at     DATETIME DEFAULT (datetime('now', 'localtime'))
+            )""",
+            drop_indexes=(),
+        )
+
+    @classmethod
+    def _rebuild_message_id_table(
+        cls, connect: sqlite3.Connection, *, table: str, create_sql: str,
+        drop_indexes: tuple[str, ...],
+    ) -> None:
+        declared = cls._column_declared_type(connect, table, "message_id")
+        if not declared or declared == "TEXT":
+            return
+        logger.info("Migrating %s.message_id from %s to TEXT", table, declared)
+        old_cols = [r[1] for r in connect.execute(f"PRAGMA table_info({table})").fetchall()]
+        connect.execute(f"ALTER TABLE {table} RENAME TO {table}_old")
+        # Renaming keeps the old indexes attached to the renamed table, which
+        # would make the later `CREATE INDEX IF NOT EXISTS` a silent no-op.
+        for idx in drop_indexes:
+            connect.execute(f"DROP INDEX IF EXISTS {idx}")
+        connect.execute(create_sql)
+        new_cols = [r[1] for r in connect.execute(f"PRAGMA table_info({table})").fetchall()]
+        copy_cols = [c for c in new_cols if c in old_cols]
+        col_list = ", ".join(copy_cols)
+        connect.execute(f"INSERT INTO {table} ({col_list}) SELECT {col_list} FROM {table}_old")
+        connect.execute(f"DROP TABLE {table}_old")
+        logger.info("%s.message_id migration done", table)
 
     def _create_table(self) -> None:
         try:
@@ -212,12 +288,14 @@ class DatabaseManager:
                 # Migration: message id + quote linkage. Enables quote-aware
                 # context ("user B is replying to what you said") and recall.
                 # message_seq is the QQ seq that a reply segment references;
-                # message_id is LLBot's short id used by delete_msg/get_msg.
+                # message_id is the platform message id (official platform ids
+                # are strings like `ROBOT1.0_xxx.yyy!zzz`, so TEXT — see
+                # _migrate_message_id_to_text for old INTEGER columns).
                 # ts_exact is a sub-second epoch stamp: `timestamp` only has
                 # second resolution, which is too coarse to interleave a bot
                 # reply with the member message it answers.
                 for col, col_type in [
-                    ("message_id", "INTEGER"),
+                    ("message_id", "TEXT"),
                     ("message_seq", "INTEGER"),
                     ("reply_to_seq", "INTEGER"),
                     ("ts_exact", "REAL"),
@@ -276,7 +354,7 @@ class DatabaseManager:
                         id         INTEGER PRIMARY KEY AUTOINCREMENT,
                         group_id   TEXT NOT NULL,
                         target_user_id TEXT DEFAULT '',
-                        message_id INTEGER,
+                        message_id TEXT,
                         text       TEXT DEFAULT '',
                         recalled   INTEGER DEFAULT 0,
                         ts_exact   REAL,
@@ -289,6 +367,9 @@ class DatabaseManager:
                     connect.execute(
                         "ALTER TABLE bot_messages ADD COLUMN target_user_id TEXT DEFAULT ''"
                     )
+                # Older databases declared message_id INTEGER; the official
+                # platform uses string ids, so rebuild those tables as TEXT.
+                self._migrate_message_id_to_text(connect)
                 connect.execute(
                     """CREATE TABLE IF NOT EXISTS user_profiles(
                         id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -576,7 +657,7 @@ class DatabaseManager:
     def record_group_message(
         self, group_id: str, user_id: str, user_name: str,
         content: str, user_role: str = "", msg_type: str = "text",
-        message_id: int | None = None, message_seq: int | None = None,
+        message_id: str | None = None, message_seq: int | None = None,
         reply_to_seq: int | None = None,
     ) -> None:
         self.deposit(
@@ -614,13 +695,7 @@ class DatabaseManager:
 
     # ── Bot's own messages (recall + "is this mine?") ────
 
-    # Sort key used to interleave two tables by real time. `timestamp` is only
-    # second-precision, so ts_exact (epoch float) is preferred, falling back to
-    # a converted julianday for rows written before the column existed.
-    _MEMBER_SORT = "IFNULL(ts_exact, (julianday(timestamp) - 2440587.5) * 86400.0)"
-    _BOT_SORT = "IFNULL(ts_exact, (julianday(created_at) - 2440587.5) * 86400.0)"
-
-    def record_bot_message(self, group_id: str, message_id: int | None,
+    def record_bot_message(self, group_id: str, message_id: str | None,
                            text: str = "", target_user_id: str = "") -> None:
         """Record one of our own messages, and who it was addressed to.
 
@@ -659,64 +734,10 @@ class DatabaseManager:
             return None
         return {"message_id": rows[0][0], "text": rows[0][1], "created_at": rows[0][2]}
 
-    def mark_bot_message_recalled(self, message_id: int) -> None:
+    def mark_bot_message_recalled(self, message_id: str) -> None:
         self.execute_action(
             "UPDATE bot_messages SET recalled = 1 WHERE message_id = ?", (message_id,)
         )
-
-    # ── Group activity analysis ──────────────────────────
-
-    def get_daily_group_stats(self, group_id: str, day: str | None = None) -> dict[str, Any]:
-        """One day of activity for a group: totals, top speakers, hourly spread.
-
-        `day` is YYYY-MM-DD; defaults to today. Note `timestamp` is the time the
-        event was stored (localtime), which is what "today" means to the group.
-        """
-        day = day or datetime.now().strftime("%Y-%m-%d")
-
-        def scalar(sql: str, params: tuple = ()) -> int:
-            try:
-                return self.fetch_data(sql, params)[0][0] or 0
-            except (sqlite3.Error, IndexError, TypeError):
-                logger.exception("daily stats query failed")
-                return 0
-
-        base = "FROM group_messages WHERE group_id = ? AND date(timestamp) = ?"
-        args = (group_id, day)
-
-        try:
-            top_rows = self.fetch_data(
-                f"SELECT user_name, COUNT(*) c, user_id {base} GROUP BY user_id "
-                "ORDER BY c DESC LIMIT 10", args,
-            )
-        except sqlite3.Error:
-            logger.exception("daily stats top-speaker query failed")
-            top_rows = []
-
-        hourly = [0] * 24
-        try:
-            for hour, count in self.fetch_data(
-                f"SELECT CAST(strftime('%H', timestamp) AS INTEGER), COUNT(*) {base} "
-                "GROUP BY 1", args,
-            ):
-                if isinstance(hour, int) and 0 <= hour < 24:
-                    hourly[hour] = count
-        except sqlite3.Error:
-            logger.exception("daily stats hourly query failed")
-
-        return {
-            "date": day,
-            "total": scalar(f"SELECT COUNT(*) {base}", args),
-            "active_users": scalar(f"SELECT COUNT(DISTINCT user_id) {base}", args),
-            "images": scalar(f"SELECT COUNT(*) {base} AND content = '[图片消息]'", args),
-            "top": [{"user_name": r[0], "count": r[1], "user_id": r[2]} for r in top_rows],
-            "hourly": hourly,
-        }
-
-    # Label used for the bot's own lines when merging transcripts. The bot's
-    # outgoing messages live in `bot_messages` (they are not echoed back by
-    # LLBot unless reportSelfMessage is on), so both tables are unioned.
-    BOT_DISPLAY_NAME = "Kiriko"
 
     @staticmethod
     def _clamp_int(value: Any, default: int, lo: int, hi: int) -> int:
@@ -915,18 +936,20 @@ class DatabaseManager:
     def find_quoted(self, group_id: str | None, message_id: Any) -> dict[str, Any] | None:
         """Resolve a quoted message id to its text and author.
 
-        This exists because LLBot's `reply` segment carries **only the id** —
-        `{"type": "reply", "data": {"id": "75563830"}}`, with no text, no
-        sender and no segments. The earlier code assumed the quoted content
-        arrived inline in the event, so every quote note came out empty and
-        quoting the bot — the exact case that motivates the feature — did
-        nothing at all. Our own tables already hold everything: `bot_messages`
-        for the bot's own lines, `group_messages` for everyone else's.
+        This exists because the `reply` segment carries **only the id** —
+        `{"type": "reply", "data": {"id": "ROBOT1.0_xxx.yyy!zzz"}}`, with no
+        text, no sender and no segments. Our own tables already hold
+        everything: `bot_messages` for the bot's own lines, `group_messages`
+        for everyone else's.
+
+        `message_id` is used verbatim: the official platform's ids are strings,
+        so casting with `int()` would raise and silently degrade every lookup
+        into a miss. None / "" still short-circuits, so the value can never
+        turn into a SQL `= NULL` that matches nothing (or worse, everything).
         """
-        try:
-            mid = int(message_id)
-        except (TypeError, ValueError):
+        if message_id is None or message_id == "":
             return None
+        mid = message_id
 
         # The bot's lines first: telling "they are quoting ME" apart from
         # "they are quoting someone else" is the whole point of the feature.
@@ -967,15 +990,13 @@ class DatabaseManager:
 
     def fetch_quoted_target(self, group_id: str | None, message_id: Any) -> str:
         """Raw addressee id recorded for one of our own messages (debug/tests)."""
-        try:
-            mid = int(message_id)
-        except (TypeError, ValueError):
+        if message_id is None or message_id == "":
             return ""
         try:
             rows = self.fetch_data(
                 "SELECT target_user_id FROM bot_messages WHERE message_id = ? "
                 "AND (? IS NULL OR group_id = ?) ORDER BY id DESC LIMIT 1",
-                (mid, group_id, group_id))
+                (message_id, group_id, group_id))
         except Exception:
             return ""
         return str(rows[0][0] or "") if rows else ""
@@ -993,158 +1014,6 @@ class DatabaseManager:
             logger.debug("user name lookup failed", exc_info=True)
             return ""
         return str(rows[0][0] or "") if rows else ""
-
-    def get_recent_group_context(
-        self, group_id: str, minutes: int = 30, limit: int = 40,
-        exclude_user: str | None = None, exclude_message_id: Any = None,
-    ) -> list[dict[str, Any]]:
-        """Recent group transcript, oldest-first, for the AI's context tool.
-
-        Includes the bot's own lines so the model can see what it already said
-        and who was answering whom.
-
-        `exclude_message_id` drops just the message being answered. Prefer it
-        over `exclude_user`: the current message is already recorded in
-        `group_messages` by the time this runs, but dropping the whole author
-        also hides everything *else* they said — and messages that never
-        mentioned the bot appear in no other context at all, so "那这个呢"
-        would have nothing to point at.
-        """
-        minutes = self._clamp_int(minutes, 30, 1, 24 * 60)
-        limit = self._clamp_int(limit, 40, 1, 200)
-        since = f"-{minutes} minutes"
-
-        member_sql = (
-            "SELECT user_name, content, timestamp, 0 AS is_bot, "
-            f"       {self._MEMBER_SORT} AS sort_key "
-            "FROM group_messages "
-            "WHERE group_id = ? AND timestamp >= datetime('now','localtime',?)"
-        )
-        params: list[Any] = [group_id, since]
-        if exclude_user:
-            member_sql += " AND user_id != ?"
-            params.append(exclude_user)
-        if exclude_message_id is not None:
-            member_sql += " AND (message_id IS NULL OR message_id != ?)"
-            params.append(exclude_message_id)
-
-        # Placeholders are positional, in the order they appear in the SQL.
-        params.append(self.BOT_DISPLAY_NAME)
-        params.extend([group_id, since])
-        if exclude_message_id is not None:
-            # bot_messages keeps its own id space, but applying the same
-            # filter costs nothing and keeps the two branches symmetric.
-            bot_id_filter = " AND (message_id IS NULL OR message_id != ?)"
-            params.append(exclude_message_id)
-        else:
-            bot_id_filter = ""
-
-        sql = (
-            f"{member_sql} UNION ALL "
-            "SELECT ?, text, created_at, 1 AS is_bot, "
-            f"       {self._BOT_SORT} AS sort_key "
-            "FROM bot_messages "
-            "WHERE group_id = ? AND recalled = 0 "
-            "AND created_at >= datetime('now','localtime',?)"
-            f"{bot_id_filter} "
-            "ORDER BY sort_key DESC LIMIT ?"
-        )
-        params.append(limit)
-
-        try:
-            rows = self.fetch_data(sql, tuple(params))
-        except sqlite3.Error:
-            logger.exception("recent context query failed")
-            return []
-        return [
-            {"user_name": r[0], "content": r[1], "timestamp": r[2], "is_bot": bool(r[3])}
-            for r in reversed(rows)
-        ]
-
-    def get_group_message_page(
-        self, group_id: str, day: str | None = None, keyword: str = "",
-        user_name: str = "", page: int = 1, size: int = 100,
-    ) -> dict[str, Any]:
-        """Paginated group transcript for the dashboard review page.
-
-        Members' messages and the bot's own lines are unioned so the review
-        shows the conversation as it actually happened.
-        """
-        page = self._clamp_int(page, 1, 1, 10_000)
-        size = self._clamp_int(size, 100, 1, 500)
-
-        member_where = ["group_id = ?"]
-        bot_where = ["group_id = ?"]
-        member_params: list[Any] = [group_id]
-        bot_params: list[Any] = [group_id]
-
-        if day:
-            member_where.append("date(timestamp) = ?")
-            member_params.append(day)
-            bot_where.append("date(created_at) = ?")
-            bot_params.append(day)
-        if keyword:
-            member_where.append("content LIKE ?")
-            member_params.append(f"%{keyword}%")
-            bot_where.append("text LIKE ?")
-            bot_params.append(f"%{keyword}%")
-        if user_name:
-            member_where.append("user_name = ?")
-            member_params.append(user_name)
-            # Bot rows carry no real sender, so they only match the bot label.
-            bot_where.append("? = ?")
-            bot_params.extend([user_name, self.BOT_DISPLAY_NAME])
-
-        # sort_key keeps messages that share a timestamp in insertion order —
-        # a plain ORDER BY timestamp is unstable for back-to-back messages.
-        union = (
-            "SELECT user_name, content, timestamp, message_seq, reply_to_seq, 0 AS is_bot, "
-            f"       {self._MEMBER_SORT} AS sort_key "
-            f"FROM group_messages WHERE {' AND '.join(member_where)} "
-            "UNION ALL "
-            "SELECT ?, text, created_at, NULL, NULL, 1 AS is_bot, "
-            f"       {self._BOT_SORT} AS sort_key "
-            f"FROM bot_messages WHERE {' AND '.join(bot_where)}"
-        )
-        # member placeholders come first, then the bot SELECT's label, then bot's own
-        params = member_params + [self.BOT_DISPLAY_NAME] + bot_params
-
-        try:
-            total = self.fetch_data(
-                f"SELECT COUNT(*) FROM ({union})", tuple(params)
-            )[0][0]
-            rows = self.fetch_data(
-                "SELECT user_name, content, timestamp, message_seq, reply_to_seq, is_bot "
-                f"FROM ({union}) ORDER BY sort_key DESC LIMIT ? OFFSET ?",
-                tuple(params) + (size, (page - 1) * size),
-            )
-        except (sqlite3.Error, IndexError, TypeError):
-            logger.exception("group message page query failed")
-            return {"items": [], "total": 0, "page": page, "pages": 0}
-
-        items = [
-            {"user_name": r[0], "content": r[1], "timestamp": r[2],
-             "message_seq": r[3], "reply_to_seq": r[4], "is_bot": bool(r[5])}
-            for r in reversed(rows)   # oldest-first within the page
-        ]
-        return {
-            "items": items,
-            "total": total,
-            "page": page,
-            "pages": max(1, (total + size - 1) // size),
-        }
-
-    def get_group_days(self, group_id: str, limit: int = 60) -> list[dict[str, Any]]:
-        """Days that have messages, newest first (for the review page picker)."""
-        try:
-            rows = self.fetch_data(
-                "SELECT date(timestamp) d, COUNT(*) FROM group_messages "
-                "WHERE group_id = ? GROUP BY d ORDER BY d DESC LIMIT ?",
-                (group_id, limit),
-            )
-        except sqlite3.Error:
-            return []
-        return [{"date": r[0], "count": r[1]} for r in rows if r[0]]
 
     # ── Group push subscriptions ─────────────────────────
 
@@ -1237,73 +1106,6 @@ class DatabaseManager:
                 continue
             out.append({"profile": parsed, "message_count": cnt, "recorded_at": ts})
         return out
-
-    # ── Topic threading ──────────────────────────────────
-
-    def get_group_threads(self, group_id: str, day: str | None = None,
-                          max_gap_minutes: int = 10,
-                          limit: int = 300) -> list[dict[str, Any]]:
-        """Group a transcript into topic threads.
-
-        A group chat runs several conversations at once, so a flat timeline is
-        hard to read (and hard for the model to reason about). Messages are
-        clustered by: does this reply to something already in the current
-        thread, or did the conversation pause long enough to be a new topic.
-        """
-        max_gap = self._clamp_int(max_gap_minutes, 10, 1, 240)
-        limit = self._clamp_int(limit, 300, 10, 1000)
-
-        where = ["group_id = ?"]
-        params: list[Any] = [group_id]
-        if day:
-            where.append("date(timestamp) = ?")
-            params.append(day)
-        clause = " AND ".join(where)
-
-        try:
-            rows = self.fetch_data(
-                "SELECT user_name, content, timestamp, message_seq, reply_to_seq, "
-                "       IFNULL(ts_exact, (julianday(timestamp) - 2440587.5) * 86400.0) AS sk, "
-                "       0 AS is_bot FROM group_messages "
-                f"WHERE {clause} ORDER BY sk ASC LIMIT ?",
-                tuple(params) + (limit,),
-            )
-        except sqlite3.Error:
-            logger.exception("thread query failed")
-            return []
-
-        threads: list[dict[str, Any]] = []
-        current: dict[str, Any] | None = None
-        prev_sk: float | None = None
-
-        for user_name, content, ts, seq, reply_seq, sk, is_bot in rows:
-            replies_into_current = (
-                current is not None and reply_seq is not None
-                and str(reply_seq) in current["seqs"]
-            )
-            gap_too_big = prev_sk is not None and (sk - prev_sk) > max_gap * 60
-
-            if current is None or (gap_too_big and not replies_into_current):
-                current = {"index": len(threads) + 1, "start": ts, "end": ts,
-                           "messages": [], "seqs": set(), "participants": set()}
-                threads.append(current)
-
-            current["messages"].append({
-                "user_name": user_name, "content": content, "timestamp": ts,
-                "message_seq": seq, "reply_to_seq": reply_seq, "is_bot": bool(is_bot),
-            })
-            if seq is not None:
-                current["seqs"].add(str(seq))
-            current["participants"].add(user_name)
-            current["end"] = ts
-            prev_sk = sk
-
-        for t in threads:
-            t["participants"] = sorted(p for p in t["participants"] if p)
-            t["seqs"] = len(t["seqs"])
-            t["size"] = len(t["messages"])
-            t["title"] = _thread_title(t["messages"])
-        return threads
 
     # ── AI usage metrics ─────────────────────────────────
 

@@ -71,14 +71,6 @@ PERSONA = """【你是谁】
 - **默认往短了说**：日常聊天一两句就够，别动不动写一屏。
   对方要的是聊天，不是小作文；只有明确要长内容（写代码、要清单、要详细解释）时才展开
 
-【有时候你会直接说话】
-- 你偶尔会**发语音**而不是打字——撒娇、吐槽、情绪上来了、或者一句话就能说完的时候
-- 要发语音就调用 send_voice。这时候要想的不是“写什么”，而是“**怎么说出来**”：
-  口语、短、别带颜文字和表情符号、别用书面语，念出来要顺口
-- 下面这些情况**打字**：正经答题、内容里有数字/链接/代码、需要对方反复看的信息、
-  私聊里不合适发语音的时候
-- 可以在合适的时候换个音色逗人（比如故意用搞笑的声音），但别每条都换，
-  也别为了用语音而用语音
 【情绪是渐进式的】
 同一个人反复烦你、问同样的事时，你**不会真的生气**，而是**越来越傲娇**，
 最后干脆摆烂不干了：
@@ -313,46 +305,16 @@ def build_role_prompt(extra: str = "") -> str:
             f"{extra}")
 
 
-_CONTEXT_LINE_LIMIT = 160
-
-
-def format_group_context(rows: list[dict[str, Any]], minutes: int = 15) -> str:
-    """Render the ambient group transcript that precedes the current message.
-
-    Deliberately terse: one line per message, trimmed, no timestamps. This is
-    background awareness — "what are these people talking about" — not a
-    transcript to be quoted back, and every line costs tokens on every single
-    group message.
-    """
-    lines: list[str] = []
-    for row in rows or []:
-        text = " ".join(str(row.get("content") or "").split())
-        if not text:
-            continue
-        if len(text) > _CONTEXT_LINE_LIMIT:
-            text = text[:_CONTEXT_LINE_LIMIT] + "…"
-        who = "你(Kiriko)" if row.get("is_bot") else (row.get("user_name") or "某人")
-        lines.append(f"  {who}: {text}")
-    if not lines:
-        return ""
-    return (
-        f"【群里最近 {minutes} 分钟还发生了这些】（不是发给你的，是背景）\n"
-        + "\n".join(lines)
-        + "\n【背景结束】上面是群里正在聊的，下面才是需要你回应的消息。"
-    )
-
-
 def build_user_message(robot: Any, reply_note: str = "",
-                       group_context: str = "", now: Any = None,
-                       mood: str = "") -> str:
-    """Build the user-role message — the ambient context plus this interaction.
+                       now: Any = None, mood: str = "") -> str:
+    """Build the user-role message — the quote note plus this interaction.
 
     Everything volatile lives here rather than in the system prompt: the quote
-    note, the group context and the timestamp. They belong next to the message
-    they describe, and — more importantly — the system prompt plus the tool
-    schemas are the cacheable prefix. One changed character anywhere in the
-    system prompt throws away the entire tool-schema cache, and the timestamp
-    used to change every single minute.
+    note and the timestamp. They belong next to the message they describe, and
+    — more importantly — the system prompt plus the tool schemas are the
+    cacheable prefix. One changed character anywhere in the system prompt
+    throws away the entire tool-schema cache, and the timestamp used to change
+    every single minute.
     """
     msg = robot.msg.strip()
     if not msg:
@@ -360,10 +322,9 @@ def build_user_message(robot: Any, reply_note: str = "",
         msg = "[图片消息]" if robot.incoming.has_images else "[空消息]"
     stamp = _time_line(now)
     prefix = f"{reply_note}\n" if reply_note else ""
-    context = f"{group_context}\n" if group_context else ""
     feeling = f"{mood}\n" if mood else ""
     if robot.msg_type == "group":
-        return (f"{stamp}{feeling}{context}{prefix}群「{robot.group_name or ''}」中 "
+        return (f"{stamp}{feeling}{prefix}群「{robot.group_name or ''}」中 "
                 f"用户 {robot.user_name} 说：{msg}")
     return f"{stamp}{feeling}{prefix}用户 {robot.user_name} 说：{msg}"
 
@@ -414,40 +375,6 @@ def build_system_prompt(
         "如果当前消息已经带了图片，或用户只是闲聊提到“图片”这个词，不要调用它。"
         "不确定时宁可文字回复也不乱调工具。禁止编造任何功能结果。"
     )
-
-    # ── When to pull the wider group context ──
-    # Reading the room is a decision the model makes via read_context. It first
-    # almost never fired, was loosened to "when in doubt, look" — and then fired
-    # on greetings, insults and "[图片消息]", dumping a transcript that the
-    # reply answered *instead of* the actual message. So the trigger is now a
-    # single narrow test, plus an explicit do-not-call list.
-    context_rule = ""
-    if not is_private and not Config.GROUP_CONTEXT_ENABLED:
-        context_rule = (
-            "【关于群聊语境】"
-            "你只收得到 @你 的消息，群里其他人在聊什么你看不到，"
-            "但**不要假装知道自己没看到的内容**。"
-            "只有**一种**情况需要调用 read_context："
-            "当前这句话单独看根本读不懂——比如只有一个「那这个呢」「所以呢」，"
-            "或者明显在接别人的话，而你不知道前文。"
-            "除此之外都**不要**调用：打招呼、骂你、夸你、说「收到」「好的」「哈哈」、"
-            "发图片表情、以及问题本身自足的话（「tail 是什么」「今天几号」），"
-            "按字面回答就行，用不着看聊天记录。"
-            "**拿不准的时候不要查。** 多查一次会把群里几十条无关的聊天塞进你眼前，"
-            "反而把当前这句话淹掉，更容易答非所问。"
-            "宁可先问一句「你说的是哪个」，也不要抓一堆记录来猜。"
-        )
-    elif not is_private:
-        context_rule = (
-            "【关于群聊语境】"
-            "你只收得到 @你 的消息。每条群消息前面已经附了一段最近的群聊背景"
-            "（标着「群里最近…还发生了这些」），先看那段再回答。"
-            "背景还不够用时（当前这句话单独读不懂），再用 read_context 往前翻；"
-            "但**拿不准就别查**——多查一次会把几十条无关聊天塞进你眼前，"
-            "反而把当前这句话淹掉。"
-        )
-    if context_rule:
-        parts.append(context_rule)
 
     # ── Group-specific rules ──
     if not is_private:
