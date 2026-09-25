@@ -37,8 +37,10 @@ Usage
 While it is watching, go and talk in the group (both plain messages and ones
 that @ the bot), then come back and read the summary.
 
-Nothing is sent to the group. The probe is read-only by design, so it cannot
-trip QQ's spam controls on the account you are trying to keep clean.
+**By default it sends nothing** — it only observes, so it cannot trip anything
+on the account. Passing `--reply` additionally exercises the send path (the
+platform's passive reply: same `msg_id` within 5 minutes, up to 5 replies per
+message), which is otherwise unverified until the adapter is written.
 """
 
 from __future__ import annotations
@@ -121,7 +123,39 @@ def probe_rest(token: str) -> str:
     return d["url"]
 
 
-async def watch(gateway: str, token: str, seconds: int, dump: str | None) -> None:
+def send_passive_reply(token: str, app_id: str, event: dict[str, Any],
+                       text: str, seq: int = 1) -> tuple[int, Any]:
+    """Reply to a received message — the *only* sending mode the platform allows.
+
+    The official platform removed proactive push (2025-04-21) and only permits
+    a passive reply: it must carry the original message's `id` as `msg_id`, be
+    sent within 5 minutes, and a given `msg_id` + `msg_seq` may only be used
+    once (max 5 distinct replies per message).
+    """
+    d = event.get("d") or {}
+    msg_id = d.get("id") or ""
+    gid = d.get("group_openid")
+    if gid:
+        url = f"{API_BASE}/v2/groups/{gid}/messages"
+    else:
+        openid = (d.get("author") or {}).get("user_openid") or ""
+        url = f"{API_BASE}/v2/users/{openid}/messages"
+
+    r = requests.post(
+        url,
+        json={"content": text, "msg_type": 0, "msg_id": msg_id, "msg_seq": seq},
+        headers={"Authorization": f"QQBot {token}", "X-Union-Appid": app_id},
+        timeout=20,
+    )
+    try:
+        return r.status_code, r.json()
+    except ValueError:
+        return r.status_code, r.text[:300]
+
+
+async def watch(gateway: str, token: str, seconds: int, dump: str | None,
+                reply: str = "", reply_count: int = 1,
+                app_id: str = "") -> None:
     """Connect, identify, and print every event verbatim."""
     try:
         import websockets  # noqa: PLC0415  (optional dependency, probe only)
@@ -190,6 +224,19 @@ async def watch(gateway: str, token: str, seconds: int, dump: str | None) -> Non
                         dump_fh.write(json.dumps(pkt, ensure_ascii=False) + "\n")
                         dump_fh.flush()
                     print_event(pkt)
+
+                    # Optional: prove the send path too. Kept behind a flag
+                    # because the probe's default job is to observe only.
+                    if reply and str(pkt.get("t", "")).endswith("MESSAGE_CREATE"):
+                        for seq in range(1, min(reply_count, 5) + 1):
+                            code, resp = send_passive_reply(
+                                token, app_id, pkt, reply, seq=seq)
+                            ok = isinstance(resp, dict) and resp.get("id")
+                            log(f"    → 被动回复 #{seq}: HTTP {code} "
+                                f"{'✓ 已发出 id=' + str(resp.get('id'))[:24] if ok else json.dumps(resp, ensure_ascii=False)[:200]}")
+                            # Same msg_id + msg_seq twice is rejected by design;
+                            # that is worth seeing once, so a repeat is not retried.
+                            break
             finally:
                 hb.cancel()
     finally:
@@ -209,6 +256,7 @@ def print_event(pkt: dict[str, Any]) -> None:
         return
 
     author = d.get("author") or {}
+    log(f"  id (被动回复用) = {d.get('id')}")
     log(f"  group_openid = {d.get('group_openid') or '(单聊)'}")
     log(f"  content      = {str(d.get('content'))[:80]!r}")
     ids = {k: author.get(k) for k in MAPPING_FIELDS if author.get(k)}
@@ -273,6 +321,8 @@ def summarise(events: list[dict[str, Any]]) -> None:
     else:
         log("③ 能否映射回 QQ 号：❌ 事件里完全没有 union_* 字段 —— "
             "用户历史只能重新积累，数据库迁移只剩下参考数据那一层")
+    if not events:
+        log("提示：加 --reply '测试' 可以在收到消息时顺便验证发送路径")
     log("")
     log("（把上面这段连同事件的原始 JSON 一起发我，我来定后面的方案）")
 
@@ -283,6 +333,11 @@ def main() -> None:
     ap.add_argument("--watch", type=int, default=120,
                     help="监听多少秒（默认 120）")
     ap.add_argument("--dump", default=None, help="把原始事件追加写到这个文件")
+    ap.add_argument("--reply", default="",
+                    help="收到消息时被动回复这句话（默认不回，只观察）。"
+                         "用来验证发送路径、5 分钟窗口和 msg_id/msg_seq 去重")
+    ap.add_argument("--reply-count", type=int, default=1,
+                    help="每条消息最多回几次（平台上限 5，默认 1）")
     args = ap.parse_args()
 
     app_id = os.environ.get("QQ_APP_ID") or ""
@@ -320,7 +375,9 @@ def main() -> None:
     log("  · 开放平台后台「事件订阅」里已勾选群相关事件")
     log("  · 群里发过一条普通消息和一条 @机器人 的消息")
     try:
-        asyncio.run(watch(gateway, token, args.watch, args.dump))
+        asyncio.run(watch(gateway, token, args.watch, args.dump,
+                          reply=args.reply, reply_count=args.reply_count,
+                          app_id=app_id))
     except KeyboardInterrupt:
         log("\n（手动中断）")
 
