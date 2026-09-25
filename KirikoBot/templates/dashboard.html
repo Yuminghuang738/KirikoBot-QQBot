@@ -24,13 +24,11 @@
 
     <div class="nav-group">对话与用户</div>
     <a data-page="chat"><span class="ico">💬</span>对话记录</a>
-    <a data-page="messages"><span class="ico">📨</span>群消息</a>
     <a data-page="profiles"><span class="ico">👤</span>用户画像</a>
     <a data-page="affection"><span class="ico">💕</span>好感度</a>
     <a data-page="learning"><span class="ico">🧠</span>自学习</a>
 
     <div class="nav-group">内容与工具</div>
-    <a data-page="reminders"><span class="ico">⏰</span>提醒</a>
     <a data-page="tarot"><span class="ico">🃏</span>塔罗</a>
     <a data-page="stickers"><span class="ico">🎨</span>表情包</a>
     <a data-page="amps"><span class="ico">🎸</span>箱头库</a>
@@ -39,15 +37,11 @@
     <div class="nav-group">系统</div>
     <a data-page="versions"><span class="ico">📦</span>版本日志</a>
     <a data-page="groups"><span class="ico">👥</span>群管理</a>
-    <a data-page="activity"><span class="ico">📈</span>群活跃</a>
-    <a data-page="history"><span class="ico">🗂️</span>聊天回看</a>
     <a data-page="ai"><span class="ico">🤖</span>AI 用量</a>
-    <a data-page="push"><span class="ico">🔔</span>群推送</a>
     <a data-page="settings"><span class="ico">⚙️</span>群设置</a>
 
-    <div class="nav-group">LLBot 连接</div>
-    <a data-page="llbot"><span class="ico">🔌</span>连接状态</a>
-    <a data-page="webqq"><span class="ico">🖥️</span>WebQQ</a>
+    <div class="nav-group">连接</div>
+    <a data-page="connection"><span class="ico">🔗</span>连接状态</a>
   </nav>
 
   <div class="aside-foot">
@@ -67,7 +61,6 @@
   <div class="content" id="mainContent"></div>
 </main>
 
-<script>window.__KIRIKO__={llbotPublicUrl:{{ llbot_public_url|tojson }}};</script>
 <script src="/static/js/app.js?v={{ asset_v }}"></script>
 </body>
 </html>

@@ -1,4 +1,4 @@
-"""Security-relevant behaviour: webhook signatures and output escaping."""
+"""Security-relevant behaviour: dashboard auth exemptions and output escaping."""
 from __future__ import annotations
 
 import logging
@@ -7,7 +7,6 @@ import os
 import pytest
 
 from conftest import APP_DIR
-from webhook_auth import expected_signature, signature_ok
 
 PROJECT_DIR = os.path.dirname(APP_DIR)
 
@@ -23,53 +22,43 @@ class TestAuthExemptions:
     def test_healthz_is_exempt(self):
         import dashboard_auth
 
-        assert "healthz" in dashboard_auth._WEBHOOK_ENDPOINTS
+        assert "healthz" in dashboard_auth._EXEMPT_ENDPOINTS
 
-    def test_webhook_is_exempt(self):
+    def test_static_files_are_exempt(self):
+        """贴图和面板资源由浏览器同源加载，必须免鉴权。"""
         import dashboard_auth
 
-        assert "receive" in dashboard_auth._WEBHOOK_ENDPOINTS
+        assert "static" in dashboard_auth._EXEMPT_ENDPOINTS
+
+    def test_no_inbound_webhook_exemption_remains(self):
+        """入站 webhook 已被出站 WebSocket 网关取代，不该再留豁免。
+
+        这条是有意写成「不存在」的断言：豁免列表是鉴权的白名单，多一个词就是
+        多一条免密通路。以前有个 `receive`（OneBot webhook 自带 HMAC 签名），
+        现在没有那个路由了，留着只会让人以为还有个回调端点要保护。
+        """
+        import dashboard_auth
+
+        assert "receive" not in dashboard_auth._EXEMPT_ENDPOINTS
+        assert not hasattr(dashboard_auth, "_WEBHOOK_ENDPOINTS")
 
     def test_main_exposes_the_health_route(self):
         src = open(os.path.join(APP_DIR, "main.py"), encoding="utf-8").read()
         assert '@app.route("/healthz")' in src
+
+    def test_main_has_no_webhook_route(self):
+        """断言的是**路由装饰器**不存在，不是字符串不出现 ——
+        main.py 里有意留了几处 tombstone 注释解释这条路为什么删了。"""
+        src = open(os.path.join(APP_DIR, "main.py"), encoding="utf-8").read()
+        for pattern in ('@app.route("/webhook"', "@app.route('/webhook'",
+                        '@app.route("/webhook/', "@app.route('/webhook/"):
+            assert pattern not in src, f"main.py 仍有 webhook 路由：{pattern}"
 
     def test_compose_healthcheck_hits_the_exempt_endpoint(self):
         compose = open(os.path.join(PROJECT_DIR, "docker-compose.yml"), encoding="utf-8").read()
         assert "/healthz" in compose
         assert "http://localhost:5000/healthz" in compose
 
-
-class TestWebhookSignature:
-    BODY = b'{"post_type":"message","user_id":123}'
-
-    def test_accepts_valid_signature(self):
-        sig = expected_signature("s3cret", self.BODY)
-        assert sig.startswith("sha1=")
-        assert signature_ok("s3cret", self.BODY, sig)
-
-    def test_rejects_tampered_body(self):
-        sig = expected_signature("s3cret", self.BODY)
-        assert not signature_ok("s3cret", self.BODY + b" ", sig)
-
-    def test_rejects_wrong_token(self):
-        sig = expected_signature("s3cret", self.BODY)
-        assert not signature_ok("other", self.BODY, sig)
-
-    def test_rejects_missing_signature(self):
-        assert not signature_ok("s3cret", self.BODY, None)
-        assert not signature_ok("s3cret", self.BODY, "")
-
-    def test_open_when_no_token_configured(self):
-        # Backwards compatibility: an unconfigured token must not take a
-        # running bot offline (main logs a loud warning instead).
-        assert signature_ok(None, self.BODY, None)
-        assert signature_ok("", self.BODY, "garbage")
-
-    def test_signature_is_over_raw_bytes(self):
-        pretty = b'{"a": 1}'
-        compact = b'{"a":1}'
-        assert expected_signature("k", pretty) != expected_signature("k", compact)
 
 
 class TestLogEscaping:

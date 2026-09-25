@@ -1,0 +1,184 @@
+# Phase 0 实测结论（QQ 官方机器人平台）
+
+> 数据来源：AppID 102818934（机器人 `Kiriko-测试中`），
+> 用 `tools/qq_probe.py` 通过 WebSocket 接入实测。
+> 本文件只记录**实测到的**，不写推测；未验证的一律标注「待验证」。
+
+## 已确定
+
+| # | 结论 | 证据 |
+|---|---|---|
+| ① | **凭据与链路可用** | `access_token` 成功签发（`expires_in=7200`） |
+| ② | **WebSocket 接入可用** | 收到 `READY`，带 `session_id` 与 `shard` |
+| ③ | **发送路径可用** | 被动回复 `HTTP 200`，返回了 message id |
+| ④ | **接入方式确实可以只用 WebSocket** | 无需回调地址、无需公网 HTTPS |
+| ⑤ | **群聊事件可用** | 收到 `GROUP_AT_MESSAGE_CREATE` 与 `GROUP_ADD_ROBOT` |
+| ⑥ | **群内被动回复可用** | 群消息回复同样 `HTTP 200` 并返回 id |
+| ⑦ | **群内能拿到昵称** | 群事件的 `author.username = "ユーミン"`（单聊事件里没有这个字段）|
+
+`READY` 事件里的机器人自身：
+
+```json
+{"version": 1,
+ "session_id": "50144186-12fa-4f38-a371-703bbdfcd47a",
+ "user": {"id": "17427809079063831668", "username": "Kiriko-测试中",
+          "bot": true, "status": 1},
+ "shard": [0, 1]}
+```
+
+## 关键发现一：ID 全是字符串，且没有真实 QQ 号
+
+单聊事件 `C2C_MESSAGE_CREATE` 的 `author`：
+
+```json
+{"id":                 "466A7D064E5495F91DE04FA987EACBA3",
+ "user_openid":        "466A7D064E5495F91DE04FA987EACBA3",
+ "union_openid":       "466A7D064E5495F91DE04FA987EACBA3"}
+```
+
+三点要注意：
+
+1. **`union_user_account` 字段根本没出现**（官方文档标它「可能为空」，
+   实测在单聊里是直接缺席）。理论上最可能对应 QQ 号的就是这个字段。
+2. **`union_openid` 与 `user_openid` 完全相同** —— 说明在这个部署里它不是
+   真正的「跨应用」ID，只是同一个 openid 换个名字。
+3. **`username` 也没出现** —— 只有 openid。**这意味着可能拿不到用户昵称**，
+   面板上会显示成一串大写十六进制。（待群聊事件确认，见下）
+
+### 对数据库迁移的影响
+
+**结论：用户维度的数据基本无法映射回 QQ 号。**
+
+现有库里 `group_messages` / `history` / `user_profiles` / `user_affection` /
+`learning_log` / `bot_messages` 全部以**真实 QQ 号**为键，而官方只给 openid，
+两者之间没有任何可计算的对应关系。
+
+所以迁移只能是：
+
+- ✅ **参考数据直接搬**：`tarot_content`、`amp_heads`、`app_versions`、
+  `changelog`、`app_state`、贴图索引
+- ❌ **用户数据搬不了**：画像、好感度、聊天历史、学习记录、逐条发言
+  —— 只能从零重新积累
+- ⚠️ **群设置手动重配**：群号 → `group_openid`
+
+## 关键发现二：消息 id 是长字符串，不是整数
+
+被动回复要拿原消息的 `id` 当 `msg_id`，而它是这种格式：
+
+```
+ROBOT1.0_LpwIaw7ngPGxMaqVcn7UcUA4ynteUqeAgkgSfRrwtccWWeLEkWaXOSc.WvNfdNgd1wiKZLPRSDuSd87dpUU-qLK7vOIcYRDE9IfsMXwqNnE!
+```
+
+约 120 字符、含 `.` 与 `!`。**现有库里几处 `message_id` 是 `INTEGER`**，
+放不下，Phase 1 必须改成 `TEXT`：
+
+- `bot_messages.message_id INTEGER`
+- `group_messages.message_id`（需确认类型）
+
+连带的逻辑也要改：
+
+- `llbot_client._recent_sent` / `is_own_message` 目前按**整数**比较，
+  且 `_MIN_TEXT_MATCH` 那套按文本兜底的判断也依赖 int 语义
+- `_remember_sent` 现在会跳过「falsy id」（那是为 `send_group_ai_record`
+  返回 0 加的）—— 字符串 id 不受影响，但判断要重新过一遍
+
+## 关键发现三：被动回复是唯一的发送方式
+
+- 主动推送已于 **2025-04-21** 由官方下线
+- 被动回复必须带原消息 `id` 作为 `msg_id`，官方文档写的有效期是 **5 分钟**、
+  每条消息最多回 **5 次**（`msg_id` + `msg_seq` 组合唯一）
+
+实测立即回复是成功的（`HTTP 200`）。**超时后的行为待验证** ——
+故意等 6 分钟再回一次即可确认。
+
+## 关键发现四：群聊身份与昵称
+
+群 @ 事件的 `author`：
+
+```json
+{"id":            "466A7D064E5495F91DE04FA987EACBA3",
+ "member_openid": "466A7D064E5495F91DE04FA987EACBA3",
+ "union_openid":  "466A7D064E5495F91DE04FA987EACBA3",
+ "username":      "ユーミン"}
+```
+
+- ✅ **`username` 在群事件里有值** —— 面板可以显示真实昵称，
+  不需要额外做「openid → 名字」映射（单聊事件里没有这个字段）
+- ❌ 但 `member_openid` / `union_openid` / `id` **仍然完全相同**，
+  依旧**没有任何能对应回 QQ 号的东西** —— 「用户数据迁不过来」这条在群里同样成立
+
+`group_openid` 形态：`A968B3FFD260C6D9FF38FA671BC543F5`（32 位大写十六进制）
+
+另外收到 **`GROUP_ADD_ROBOT`** 事件（机器人被拉进群），带
+`group_openid` + `op_member_openid`。这个事件有用：可以在入群时
+自动做初始化（比如给新群写一份默认的功能开关），不用等人去面板点。
+
+## 待验证
+
+| 项 | 为什么重要 | 状态 |
+|---|---|---|
+| **全量模式**（`GROUP_MESSAGE_CREATE`，非 @ 的群消息） | **决定群语境 / 活跃统计 / 聊天回看能不能保留** | ⏳ 开启方式已找到（见下），待实测确认 |
+| **被动回复超时（>5 分钟）的实际报错** | 决定回复策略 | 待测 |
+| **消息长度上限** | 决定要不要切分 | 待测 |
+| 群聊事件里 `union_user_account` 是否出现 | 只在单聊确认了它缺席 | 群事件里也没有 |
+
+## 对计划的影响（待群聊结果后定稿）
+
+- Phase 4「数据库迁移」的用户数据那一层要**删掉**，只保留参考数据
+- Phase 1 要加一项：`message_id` 列 `INTEGER → TEXT`（涉及迁移脚本）
+- 面板要加「openid → 显示名」的映射层
+- 「箱头推荐改成按需查询工具」这个决定更重要了 ——
+  定时推送没了，箱头库只能靠用户主动问
+
+
+## 关键发现五：全量模式的开关在 QQ 里，不在开发者后台
+
+两次实测都只收到 `GROUP_AT_MESSAGE_CREATE`，翻后台也找不到「接收所有消息」
+的配置项 —— 因为**它根本不在开发者后台**。
+
+官方文档（[群聊消息接收开启](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/group_msg_receive.html)）写的是：
+
+> **群管理员在机器人资料页操作开启通知时触发。**
+> 事件名 `GROUP_MSG_RECEIVE`，Intent 同样是 `GROUP_AND_C2C_EVENT (1<<25)`
+
+也就是说：**由群管理员在 QQ 客户端里打开机器人的资料页、开启通知**。
+开启的瞬间会推一个 `GROUP_MSG_RECEIVE` 事件；之后该群才开始推
+`GROUP_MESSAGE_CREATE`（全部消息）。关闭时对应 `GROUP_MSG_REJECT`。
+
+**对方案的意义**：全量模式**不需要开发者后台审批**，是群管理员的动作 ——
+比原先估计的乐观。只要机器人所在的群开启通知，群语境 / 活跃统计 /
+聊天回看 就都能保留。
+
+顺带：`GROUP_MSG_RECEIVE` / `GROUP_MSG_REJECT` 这两个事件本身也有用 ——
+可以拿来做「本群是否允许机器人看全部消息」的开关状态同步，
+甚至映射成面板里的一个群功能开关。
+
+## 决定：以「只收 @ 事件」为基线，全量模式作为可选的加分项
+
+三次实测都只收到 `GROUP_AT_MESSAGE_CREATE`，且没有 `GROUP_MSG_RECEIVE`，
+说明群里的「开启通知」开关始终没打开。**不再为此阻塞。**
+
+原因是一个更根本的判断：**架构不该依赖全量模式。**
+
+官方既有 `GROUP_AT_MESSAGE_CREATE`（只 @）又有 `GROUP_MESSAGE_CREATE`（全量），
+两者字段结构完全一致。所以适配层只要按前者写，后者是**同一份代码收到更多事件**
+而已。因此：
+
+| 层 | 决定 |
+|---|---|
+| transport / 事件解析 | 按 @ 事件写，全量事件走同一条路径 |
+| 群语境 / 统计 / 回看 | 标记为**「该群开启全量后自动可用」**，没开则不显示，而不是砍掉 |
+| 面板 | 展示每个群的全量状态（可由 `GROUP_MSG_RECEIVE` / `GROUP_MSG_REJECT` 同步） |
+
+这样做的好处：**全量能不能开，只影响功能多少，不影响架构和排期。**
+用户哪天在某个群开了通知，那一个群立刻多出语境/统计/回看，代码不用改。
+
+### 待用户在 QQ 里确认的操作
+
+1. 群内点机器人头像 → 打开资料页
+2. 找「开启通知」类开关（名称可能是「接收消息」「允许查看群消息」）
+3. 由群管理员开启
+
+开启瞬间应推 `GROUP_MSG_RECEIVE`，之后该群才推 `GROUP_MESSAGE_CREATE`。
+
+**如果找不到该开关**：不影响开工。按上表照常推进，只是群语境类功能暂时不出现。

@@ -124,24 +124,6 @@ class AiTools:
             "description": "当用户询问B站热搜、B站热门、bilibili热搜、B站排行、B站视频排行时，调用此函数获取B站热搜榜单",
             "parameters": empty_params,
         }
-        function_at_member = {
-            "name": "at_member",
-            "description": "主动@群友说话。target_name支持：群友昵称、群主、管理员、群管理。AI可自行判断何时@人，用户也可以指定要@谁。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "target_name": {
-                        "type": "string",
-                        "description": "要@的群友昵称",
-                    },
-                    "message": {
-                        "type": "string",
-                        "description": "要对ta说的话",
-                    },
-                },
-                "required": ["target_name", "message"],
-            },
-        }
         function_political_news = {
             "name": "political_news",
             "description": "当用户询问时政新闻、国际新闻、政治新闻、全球时事、BBC新闻、最新时事等时调用，获取权威媒体的时政新闻",
@@ -154,7 +136,7 @@ class AiTools:
         }
         function_current_time = {
             "name": "get_current_time",
-            "description": "获取当前精确时间（精确到秒），用于计算相对时间如'30秒后'、'5分钟后'。在设置提醒前如果不知道现在几点必须先调用此函数",
+            "description": "获取当前精确时间（精确到秒），用于回答“现在几点”“今天几号”以及计算相对时间如'30秒后'、'5分钟后'",
             "parameters": empty_params,
         }
         function_feature_request = {
@@ -169,43 +151,6 @@ class AiTools:
                     }
                 },
                 "required": ["request"],
-            },
-        }
-        function_reminder = {
-            "name": "set_reminder",
-            "description": "当用户要求提醒自己做某事时立即调用。只需传入用户原始消息，系统会自动解析时间。支持：X秒后/X分钟后/X小时后/明天X点/下午X点/X点X分/X点X分X秒/每天X点/每天X点X分/每天早上X点/每天下午X点/每天晚上X点等。如果用户使用'每天'或'每日'，将创建每日重复提醒",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "user_message": {
-                        "type": "string",
-                        "description": "用户的原始提醒请求消息",
-                    },
-                },
-                "required": ["user_message"],
-            },
-        }
-        function_list_reminders = {
-            "name": "list_reminders",
-            "description": "当用户询问'我的提醒有哪些'、'查看提醒'、'提醒列表'、'还有哪些提醒'时，调用此函数列出用户的所有提醒",
-            "parameters": empty_params,
-        }
-        function_delete_reminder = {
-            "name": "delete_reminder",
-            "description": "当用户要求取消提醒、删除提醒、移除提醒时调用。支持通过提醒编号(reminder_id)或关键词(keyword)删除。如果用户说'取消所有提醒'、'取消那个喝水的提醒'、'删除提醒#3'等，都应调用此函数",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "reminder_id": {
-                        "type": "integer",
-                        "description": "要删除的提醒编号(ID)，如果用户明确说了编号则传入",
-                    },
-                    "keyword": {
-                        "type": "string",
-                        "description": "要删除的提醒关键词，用于模糊匹配提醒内容。如果用户说'取消喝水的提醒'，则传入'喝水'",
-                    },
-                },
-                "required": [],
             },
         }
         function_music = {
@@ -255,23 +200,6 @@ class AiTools:
             ),
             "parameters": empty_params,
         }
-        function_group_stats = {
-            "name": "group_stats",
-            "description": (
-                "统计本群某一天的发言情况：总条数、活跃人数、谁说得最多、什么时段最热闹。"
-                "当用户问「今天谁最能说」「今天群里聊了多少」「昨天的发言统计」时调用"
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "day": {
-                        "type": "string",
-                        "description": "统计哪天：today（今天，默认）、yesterday（昨天）或 YYYY-MM-DD",
-                    },
-                },
-                "required": [],
-            },
-        }
         function_feature_list = {
             "name": "feature_list",
             "description": (
@@ -299,42 +227,6 @@ class AiTools:
             ),
             "parameters": empty_params,
         }
-        function_send_voice = {
-            "name": "send_voice",
-            "description": (
-                "用语音把话直接说出来，而不是打字。撒娇、吐槽、情绪上来了、"
-                "或者一句话就能说完的时候可以用。"
-                "**先想清楚这句话念出来是什么效果**：要口语、短、不带颜文字和表情符号，"
-                "写完了自己念一遍顺不顺。"
-                "正经答题、内容里有数字/链接/代码、或者需要对方反复看着操作时就打字，别用这个。"
-                "也不要每条都用——偶尔说一次才显得自然。"
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "text": {
-                        "type": "string",
-                        "description": "要念出来的话。口语化、简短，不要颜文字、不要表情符号、不要书面语",
-                    },
-                    "voice": {
-                        "type": "string",
-                        "description": (
-                            "音色。默认 lucy-voice-f38（傲娇少女，就是你平时说话的声音）。"
-                            "f38=傲娇少女，xueling=元气少女，female1=邻家小妹，f36=温柔妹妹，"
-                            "f37=文艺少女，f34=书香少女，female2=暖心姐姐，suxinjiejie=酥心御姐。"
-                            "搞怪时可以故意用 houge=猴哥 或 laibixiaoxin=小新（偶尔一次就好）"
-                        ),
-                        "enum": [
-                            "lucy-voice-f38", "lucy-voice-xueling", "lucy-voice-female1",
-                            "lucy-voice-f36", "lucy-voice-f37", "lucy-voice-f34",
-                            "lucy-voice-female2", "lucy-voice-suxinjiejie",
-                            "lucy-voice-houge", "lucy-voice-laibixiaoxin",
-                        ],
-                    },
-                },
-                "required": ["text"],
-            },
-        }
         function_similar_sticker = {
             "name": "similar_sticker",
             "description": (
@@ -343,23 +235,16 @@ class AiTools:
             ),
             "parameters": empty_params,
         }
-        function_read_context = {            "name": "read_context",
+
+        function_amp_head = {
+            "name": "amp_head",
             "description": (
-                "读本群最近的聊天记录。**只有当前这句话单独看读不懂时才用**——"
-                "比如只有一个「那这个呢」「所以呢」，或者明显在接别人的话但你不知道前文。"
-                "打招呼、骂你、夸你、说「收到」「好的」、发图、以及问题本身自足的话"
-                "（「tail 是什么」「今天几号」）都**不要**调用。"
-                "**拿不准就别查**：查到的是几十条无关聊天，会把当前这句话淹掉，"
-                "更容易答非所问；宁可先问一句「你说的是哪个」。"
+                "当用户想了解/推荐吉他音箱箱头（amp head）时调用，"
+                "例如「推荐个箱头」「今天弹什么箱头」「有什么经典的电子管箱头」。"
+                "会从箱头资料库里给出一条，含年份/功率/电子管/音色/参考价等。"
+                "注意：这只是资料推荐，不是购买链接"
             ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "minutes": {"type": "integer", "description": "往前看多少分钟，默认 15。越大越容易把注意力带跑"},
-                    "limit": {"type": "integer", "description": "最多读多少条，默认 20。别调大"},
-                },
-                "required": [],
-            },
+            "parameters": empty_params,
         }
 
         tool_tarot = {"type": "function", "function": function_tarot}
@@ -374,11 +259,7 @@ class AiTools:
         tool_dice = {"type": "function", "function": function_dice}
         tool_political_news = {"type": "function", "function": function_political_news}
         tool_bilibili = {"type": "function", "function": function_bilibili}
-        tool_at_member = {"type": "function", "function": function_at_member}
         tool_feature_request = {"type": "function", "function": function_feature_request}
-        tool_reminder = {"type": "function", "function": function_reminder}
-        tool_list_reminders = {"type": "function", "function": function_list_reminders}
-        tool_delete_reminder = {"type": "function", "function": function_delete_reminder}
         tool_balance = {"type": "function", "function": function_balance}
         tool_current_time = {"type": "function", "function": function_current_time}
         tool_music = {"type": "function", "function": function_music}
@@ -386,12 +267,10 @@ class AiTools:
         tool_check_affection = {"type": "function", "function": function_check_affection}
         tool_affection_leaderboard = {"type": "function", "function": function_affection_leaderboard}
         tool_recall_message = {"type": "function", "function": function_recall_message}
-        tool_group_stats = {"type": "function", "function": function_group_stats}
-        tool_read_context = {"type": "function", "function": function_read_context}
         tool_feature_list = {"type": "function", "function": function_feature_list}
         tool_explain_self = {"type": "function", "function": function_explain_self}
-        tool_send_voice = {"type": "function", "function": function_send_voice}
         tool_similar_sticker = {"type": "function", "function": function_similar_sticker}
+        tool_amp_head = {"type": "function", "function": function_amp_head}
 
         return [
             tool_tarot,
@@ -407,21 +286,15 @@ class AiTools:
             tool_political_news,
             tool_balance,
             tool_bilibili,
-            tool_at_member,
             tool_feature_request,
-            tool_reminder,
-            tool_list_reminders,
-            tool_delete_reminder,
             tool_current_time,
             tool_music,
             tool_sticker_battle,
             tool_check_affection,
             tool_affection_leaderboard,
             tool_recall_message,
-            tool_group_stats,
-            tool_read_context,
             tool_feature_list,
             tool_explain_self,
-            tool_send_voice,
             tool_similar_sticker,
+            tool_amp_head,
         ]
