@@ -664,13 +664,20 @@ def main_logic(robot: RobotServer) -> None:
             if not msg_content and robot.incoming.has_images:
                 msg_content = "[图片消息]"
             if msg_content:
-                reply = getattr(robot.incoming, "reply", None)
+                # 官方平台**没有 QQ seq 这个概念**：一条消息只有一个字符串 id
+                # （`ROBOT1.0_...`），引用也只给一个索引（`ref_msg_idx`）。
+                # 所以 `message_seq` / `reply_to_seq` 一律不传 —— 它们是 OneBot
+                # 时代的列，现在**只写不读**，传了也没人看。
+                #
+                # 这里曾经传的是 `robot.incoming.message_seq` 和
+                # `reply.message_seq`，而 `IncomingMessage` / `QuoteInfo` 上
+                # **都没有这个属性** → 每条群消息都在这里 `AttributeError`，
+                # 用户看到的是「抱歉，处理消息时遇到了问题，请稍后再试~」。
+                # 私聊不走这一行，所以症状只在群里出现，很难联想到是记录语句。
                 db.record_group_message(
                     robot.group_id, robot.user_id, robot.user_name, msg_content,
                     robot.user_role or "",
                     message_id=robot.incoming.message_id,
-                    message_seq=robot.incoming.message_seq,
-                    reply_to_seq=reply.message_seq if reply else None,
                 )
 
         # ── Feature gate: effective scope + disabled features ──
