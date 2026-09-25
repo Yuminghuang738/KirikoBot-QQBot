@@ -36,6 +36,7 @@ from prompt_builder import (
     deflection_for,
     filler_for,
     leaked_persona,
+    quote_ref_id,
     resolve_quote,
     build_system_prompt as _build_system_prompt,
     build_user_message as _context,
@@ -271,22 +272,23 @@ def _reply_note(robot: RobotServer) -> str:
     if reply is None:
         return ""
 
+    ref_id = quote_ref_id(reply)
     try:
-        is_own = client.is_own_message(reply.message_seq, reply.text)
+        is_own = client.is_own_message(ref_id, reply.text)
     except Exception:
         logger.debug("is_own_message failed", exc_info=True)
         is_own = False
 
     note = resolve_quote(reply, is_own,
-                         lambda mid: db.find_quoted(robot.group_id, mid),
+                         lambda mid: db.find_quoted(robot.group_id, mid,
+                                                    quoted_text=reply.text),
                          current_user=robot.user_name or "")
     # Quote awareness is otherwise invisible: if the lookup misses, the bot just
     # answers as though nothing were quoted, and there is no error to notice.
     if note:
-        logger.info("引用感知命中（id=%s）：%s", reply.message_seq, note[:100])
-    elif reply.message_seq is not None:
-        logger.info("引用感知未命中：id=%s 不在库里（无法还原被引用的内容）",
-                    reply.message_seq)
+        logger.info("引用感知命中（id=%s）：%s", ref_id, note[:100])
+    elif ref_id is not None:
+        logger.info("引用感知未命中：id=%s 不在库里（无法还原被引用的内容）", ref_id)
     return note
 
 def _mood_signal(robot: RobotServer) -> str:

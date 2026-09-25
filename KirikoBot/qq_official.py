@@ -115,11 +115,93 @@ def _first_image(segments: list[dict[str, Any]]) -> str:
 
 @dataclass
 class QuoteInfo:
-    """被引用的消息。官方在发送侧「暂未支持」引用，但**收得到**引用信息。"""
+    """被引用的消息。官方在发送侧「暂未支持」引用，但**收得到**引用信息。
+
+    `target_name` 不在官方事件里 —— 它是「被引用的那句话当初是说给谁的」，
+    只能拿被引消息的 id 去我们自己的 `bot_messages` 反查出来（见
+    `database_manager.find_quoted`）。字段放在这里是因为 `resolve_quote` 会
+    用 `dataclasses.replace()` 把它填进来，**没有这个字段 replace 会直接
+    `TypeError`**（这确实发生过：字段缺失让整条引用链路一访问就崩）。
+    """
 
     text: str = ""
     sender_name: str = ""
     message_id: str = ""
+    target_name: str = ""
+
+
+def parse_scene_ext(scene: Any) -> dict[str, str]:
+    """把 `message_scene.ext` 拆成字典。
+
+    官方格式是 `["key=value", ...]`，文档里会出现这三个键：
+
+    | 键 | 含义 |
+    |---|---|
+    | `msg_idx` | **本条**消息的索引，每条消息都有 |
+    | `ref_msg_idx` | **被引用**消息的索引，只在引用场景出现 |
+    | `auth_token` | 下载附件用的鉴权令牌 |
+
+    所以「这条消息是不是引用」看的是有没有 `ref_msg_idx`，
+    而不是有没有 `msg_idx`（后者恒有，拿它判断会把所有消息都当成引用）。
+    """
+    out: dict[str, str] = {}
+    if not isinstance(scene, dict):
+        return out
+    for item in scene.get("ext") or []:
+        if not isinstance(item, str) or "=" not in item:
+            continue
+        # 只切第一个 '='：值是 base64-ish 的令牌，里面可能还有 '='
+        key, _, value = item.partition("=")
+        out[key.strip()] = value.strip()
+    return out
+
+
+def _quote_from_element(el: dict[str, Any], fallback_id: str = "") -> QuoteInfo:
+    """从一个 `msg_elements` 元素里取被引用的正文/作者/索引。"""
+    author = el.get("author") or {}
+    return QuoteInfo(
+        text=str(el.get("content") or ""),
+        sender_name=str(author.get("username") or "") if isinstance(author, dict) else "",
+        message_id=str(el.get("msg_idx") or fallback_id or ""),
+    )
+
+
+def _extract_quote(d: dict[str, Any], scene: dict[str, str]) -> QuoteInfo | None:
+    """从事件体里解出引用消息。
+
+    官方文档（group_at_message_create）给了**两个**信号，两个都要认：
+
+    1. **消息级** `message_type == 103`（103 = 引用消息），被引内容在
+       `msg_elements[].content`；
+    2. `message_scene.ext` 里出现 `ref_msg_idx=`。
+
+    之前只检查了「`msg_elements` 里每个元素自身的 `message_type == 103`」——
+    但 103 是**消息级**字段，元素里通常根本不带它，于是这条分支在真实事件上
+    从不命中：引用感知静默失效（不报错，只是永远拿不到被引内容）。
+    """
+    elements = [el for el in (d.get("msg_elements") or []) if isinstance(el, dict)]
+    ref_idx = scene.get("ref_msg_idx", "")
+
+    # 形状一：元素自带 message_type=103（有些负载把引用嵌在元素里）
+    nested = next((el for el in elements if el.get("message_type") == 103), None)
+    if nested is not None:
+        return _quote_from_element(nested, ref_idx)
+
+    if d.get("message_type") != 103 and not ref_idx:
+        return None
+
+    # 形状二：消息级 103 / 带 ref_msg_idx，正文取第一个有内容的元素
+    body = next(
+        (el for el in elements if str(el.get("content") or "").strip()),
+        elements[0] if elements else None,
+    )
+    if body is not None:
+        return _quote_from_element(body, ref_idx)
+    # 只有索引没有正文也要给出来：`_reply_note` 会拿这个 id 去我们自己的
+    # 记录里反查，那正是「引用的是机器人说给别人的话」能被识别的路径。
+    if ref_idx:
+        return QuoteInfo(message_id=ref_idx)
+    return None
 
 
 @dataclass
@@ -161,17 +243,10 @@ class IncomingMessage:
             if ctype.startswith("image/") and att.get("url"):
                 images.append(str(att["url"]))
 
-        # 引用的消息藏在 msg_elements 里（message_type=103）。
-        quote = None
-        for el in d.get("msg_elements") or []:
-            if isinstance(el, dict) and el.get("message_type") == 103:
-                qa = el.get("author") or {}
-                quote = QuoteInfo(
-                    text=str(el.get("content") or ""),
-                    sender_name=str(qa.get("username") or ""),
-                    message_id=str(el.get("msg_idx") or ""),
-                )
-                break
+        # 引用的消息：见 _extract_quote 的说明（message_scene.ext 的
+        # ref_msg_idx / 消息级 message_type=103 两个信号，缺一不可）。
+        scene = parse_scene_ext(d.get("message_scene"))
+        quote = _extract_quote(d, scene)
 
         return cls(
             msg_type="group" if group_id else "private",

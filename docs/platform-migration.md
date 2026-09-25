@@ -96,3 +96,73 @@
 - **@群成员** → 平台不允许
 
 机器人现在是「**只有被 @ 时才存在**」的形态。
+
+---
+
+## 6. 引用消息的负载结构（实测 + 官方文档对照）
+
+这一段是补写的：迁移时**没有**记录过引用消息长什么样，而代码里写的形状是错的，
+结果引用感知静默失效了很久（不报错，只是永远拿不到被引内容）。
+
+### 实测抓到的普通消息（`events.jsonl`，未经引用）
+
+```json
+{
+  "id": "ROBOT1.0_Ja5gygCo...",
+  "content": " 你好",
+  "message_type": 0,
+  "group_openid": "A968B3FFD260C6D9FF38FA671BC543F5",
+  "message_scene": {
+    "source": "default",
+    "ext": [
+      "msg_idx=REFIDX_yTz+NP4EOZBSKsITE9PrjA==",
+      "auth_token=CJc-kAGN47_mRoKFDL3WLg"
+    ]
+  }
+}
+```
+
+**注意 `msg_idx` 每条消息都有** —— 它是「本条消息自己的索引」，不是引用标记。
+拿它的存在判断引用会把所有消息都当成引用。
+
+### 官方文档定义的引用消息
+
+依据 [群@机器人消息](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/group_at_message_create.html)：
+
+| 位置 | 字段 | 含义 |
+|---|---|---|
+| `d` | `message_type` | `0`=普通文本，`3`=结构化卡片，`101`=并行消息，`102`=聊天记录，**`103`=引用消息** |
+| `d.msg_elements[]` | `content` / `author.username` | 被引用的正文 / 被引用的作者 |
+| `message_scene.ext` | `msg_idx` | 本条消息自己的索引（恒有） |
+| `message_scene.ext` | **`ref_msg_idx`** | **被引用**消息的索引（只在引用场景出现） |
+
+所以「这条消息是不是引用」要看 `message_type == 103` **或** `ref_msg_idx` 存在 ——
+两个信号都认。
+
+### 一个反直觉的地方：索引和消息 id 不是一套编号
+
+文档示例里 `ref_msg_idx=TMP_1111-2222`，而消息 id 是 `ROBOT1.0_...`。
+**两者不能直接互换**，所以「拿被引索引去 `bot_messages.message_id` 里查」多半查不到。
+
+真正可靠的做法是：事件本来就给了**被引正文**，而机器人自己的发言正文我们是有记录的
+（`bot_messages.text` + `target_user_id`）。用正文精确匹配就能同时得到
+「这是我说的」和「我当初说给谁的」—— 后者正是「用户 B 引用了机器人说给 A 的话，
+机器人要意识到换了个人」这条功能的核心。见 `database_manager._find_quoted_by_text`。
+
+正文兜底沿用 `QQOfficialClient.is_own_message` 的 6 字符护栏，
+并且跳过 `recalled = 1` 的行（撤回过的发言不该再被引用）。
+
+### 踩过的三个坑（都在同一条链路上）
+
+1. **只认元素级的 `message_type == 103`**：103 是**消息级**字段，`msg_elements`
+   里的元素通常不带它 → 引用压根解不出来。
+2. **读 `reply.message_seq`**：`QuoteInfo` 上只有 `message_id`，没有 `message_seq`
+   → `AttributeError` 被 `except` 吞掉，反查自己记录那一步从未执行。
+   现在由 `prompt_builder.quote_ref_id` 兼容两代字段名（官方字段优先）。
+3. **`dataclasses.replace(reply, target_name=...)`**：`QuoteInfo` 没有
+   `target_name` 字段 → 走到最后一步直接 `TypeError`。该字段现在补上了
+   （它由我们自己的库反查填充，不在官方事件里）。
+
+三个坑的共同点：**都表现为「功能不生效」而不是「报错」**（第 3 个是唯一会抛的，
+但它被前两个挡在后面）。这类问题只能靠「端到端地把一个真实形状的事件走完整条链路」
+的测试发现 —— 零件测试一个都不缺，照样全绿。

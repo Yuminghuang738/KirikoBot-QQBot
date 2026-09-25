@@ -252,6 +252,25 @@ def describe_reply(reply: Any, is_own: bool, current_user: str = "") -> str:
     return f"【引用回复】这条消息引用的是 {who} 说过的话：「{text}」。"
 
 
+def quote_ref_id(reply: Any) -> Any:
+    """被引用消息的标识，兼容两代字段名。
+
+    官方平台的事件给的是 `message_id`（`QuoteInfo` 上也只有这个字段）；
+    历史代码沿用的是 OneBot 的 `message_seq`。**两个都认，官方字段优先。**
+
+    这里曾经只读 `message_seq`，而 `QuoteInfo` 根本没有那个属性 —— 于是
+    `getattr` 之外的两处访问都抛 `AttributeError`，又被各自的 `except` 吞掉：
+    `is_own` 恒为 False，反查我们自己记录的 `lookup()` 也从来没被调用过。
+    表现就是「引用的是机器人**说给别人**的话」这条永远识别不出来，
+    而这是引用感知里最要紧的那一种。
+    """
+    for attr in ("message_id", "message_seq"):
+        val = getattr(reply, attr, None)
+        if val not in (None, ""):
+            return val
+    return None
+
+
 def resolve_quote(reply: Any, is_own: bool, lookup: Any = None,
                   current_user: str = "") -> str:
     """Turn a reply segment into a usable note, filling in what the event omits.
@@ -270,10 +289,22 @@ def resolve_quote(reply: Any, is_own: bool, lookup: Any = None,
     sender = reply.sender_name or ""
 
     target = str(getattr(reply, "target_name", "") or "")
-    if (not text or not sender or (not target and is_own)) and lookup is not None:
+    # 有引用就查库 —— 这里**不再**因为「事件已经给了正文和昵称」而跳过。
+    #
+    # 以前的条件是「缺正文 / 缺昵称 / （自己说的且还不知道说给谁）」才查，
+    # 于是事件给全了正文和昵称时直接跳过。但引用信息里有**两样事件永远给不出**
+    # 的东西，只有我们自己的库知道：
+    #   · is_own —— 被引的是不是机器人自己说的。`client.is_own_message` 只记得
+    #     **本进程**发出去的消息，进程重启后引用一条更早的机器人发言就会判成
+    #     False；
+    #   · target_name —— 那句话当初是说给谁的。
+    # 两者恰恰是「用户 B 引用了机器人说给 A 的话」能被识别的全部依据，跳过查库
+    # 等于把这个功能关掉。省下的只是一次带索引的单行查询，不值得。
+    if lookup is not None:
         found = None
+        ref_id = quote_ref_id(reply)
         try:
-            found = lookup(reply.message_seq)
+            found = lookup(ref_id)
         except Exception:
             logger.debug("quote lookup failed", exc_info=True)
         if found:

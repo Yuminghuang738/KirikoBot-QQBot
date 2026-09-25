@@ -15,7 +15,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "KirikoBot"))
 
 from qq_official import (IncomingMessage, MessageBuilder, QQOfficialClient,
-                         _first_image, _plain_text)
+                         QuoteInfo, _first_image, _plain_text)
 
 
 class TestMessageTranslation:
@@ -98,7 +98,7 @@ class TestIncomingMessage:
         assert m.has_images
 
     def test_quoted_message_is_extracted(self):
-        """官方发送侧「暂未支持」引用，但收得到 —— message_type=103。"""
+        """元素自带 message_type=103 的形状（有些负载这么嵌）。"""
         m = IncomingMessage.from_event({
             "t": "GROUP_AT_MESSAGE_CREATE",
             "d": {"id": "x", "group_openid": "g", "content": "他说的啥意思",
@@ -109,6 +109,146 @@ class TestIncomingMessage:
         assert m.reply is not None
         assert m.reply.text == "原来那句话"
         assert m.reply.sender_name == "小红"
+
+    def test_message_level_103_is_a_quote(self):
+        """官方文档的形状：103 是**消息级** message_type，正文在 msg_elements。
+
+        以前只检查元素自身的 message_type==103，而元素里通常不带这个字段 ——
+        于是真实事件上的引用解析从来没命中过（不报错，只是永远拿不到内容）。
+        """
+        m = IncomingMessage.from_event({
+            "t": "GROUP_AT_MESSAGE_CREATE",
+            "d": {"id": "x", "group_openid": "g", "content": " ",
+                  "author": {"member_openid": "u"},
+                  "message_type": 103,
+                  "msg_elements": [{"content": "今天的学习计划已完成",
+                                    "author": {"username": "小华"}}],
+                  "message_scene": {"source": "default", "ext": [
+                      "msg_idx=REFIDX_zzz==",
+                      "auth_token=abc",
+                      "ref_msg_idx=TMP_1111-2222"]}},
+        })
+        assert m.reply is not None
+        assert m.reply.text == "今天的学习计划已完成"
+        assert m.reply.sender_name == "小华"
+
+    def test_ref_msg_idx_alone_marks_a_quote(self):
+        """`ref_msg_idx` 是引用场景的标记；即使没有正文也要记下 id，
+        交给 find_quoted 去我们自己的记录里反查。"""
+        m = IncomingMessage.from_event({
+            "t": "GROUP_AT_MESSAGE_CREATE",
+            "d": {"id": "x", "group_openid": "g", "content": "他说的啥意思",
+                  "author": {"member_openid": "u"},
+                  "message_scene": {"ext": ["msg_idx=REFIDX_a==",
+                                            "ref_msg_idx=TMP_999"]}},
+        })
+        assert m.reply is not None
+        assert m.reply.message_id == "TMP_999"
+
+    def test_msg_idx_alone_is_not_a_quote(self):
+        """**关键反例**：`msg_idx` 是「本条消息自己的索引」，每条消息都有。
+
+        拿它的存在判断引用会把所有消息都当成引用 —— 这是这套字段最容易踩的坑。
+        """
+        m = IncomingMessage.from_event({
+            "t": "GROUP_AT_MESSAGE_CREATE",
+            "d": {"id": "x", "group_openid": "g", "content": "你好",
+                  "author": {"member_openid": "u"},
+                  "message_type": 0,
+                  "message_scene": {"ext": ["msg_idx=REFIDX_b==",
+                                            "auth_token=xyz"]}},
+        })
+        assert m.reply is None
+
+    def test_scene_ext_values_may_contain_equals(self):
+        """值是 base64-ish 令牌，里面可能还有 '='，只能按第一个 '=' 切。"""
+        from qq_official import parse_scene_ext
+
+        parsed = parse_scene_ext({"ext": ["msg_idx=REFIDX_x==", "auth_token=a=b=c"]})
+        assert parsed["msg_idx"] == "REFIDX_x=="
+        assert parsed["auth_token"] == "a=b=c"
+        assert parse_scene_ext(None) == {}
+        assert parse_scene_ext({"ext": ["garbage", 42]}) == {}
+
+    def test_real_captured_event_has_no_quote(self):
+        """实测抓到的真实事件：只有消息级 message_type=0 + msg_idx/auth_token，
+        不该被误判成引用。"""
+        m = IncomingMessage.from_event({
+            "t": "GROUP_AT_MESSAGE_CREATE",
+            "d": {"id": "ROBOT1.0_x", "group_openid": "A968B3FF",
+                  "group_id": "A968B3FF", "content": " 你好", "message_type": 0,
+                  "author": {"id": "466A", "member_openid": "466A",
+                             "union_openid": "466A", "member_role": "owner",
+                             "username": "ユーミン"},
+                  "message_scene": {"source": "default", "ext": [
+                      "msg_idx=REFIDX_yTz+NP4EOZBSKsITE9PrjA==",
+                      "auth_token=CJc-kAGN47_mRoKFDL3WLg"]}},
+        })
+        assert m.reply is None
+        assert m.group_id == "A968B3FF"
+        assert m.user_name == "ユーミン"
+        assert m.text == "你好"
+
+
+class TestQuoteRefId:
+    """`quote_ref_id` 要同时认官方字段和历史字段。
+
+    这条曾经是真 bug：`_reply_note` / `resolve_quote` 只读 `message_seq`，
+    而官方的 `QuoteInfo` 上根本没有这个属性 → AttributeError 被 except 吞掉，
+    于是「引用的是机器人**说给别人**的话」永远识别不出来 —— 而这正是引用感知里
+    最要紧的那一种。
+    """
+
+    def test_prefers_official_message_id(self):
+        from prompt_builder import quote_ref_id
+
+        assert quote_ref_id(QuoteInfo(text="x", message_id="ROBOT1.0_a")) == "ROBOT1.0_a"
+
+    def test_falls_back_to_legacy_message_seq(self):
+        from prompt_builder import quote_ref_id
+
+        class Legacy:
+            message_seq = 75563830
+
+        assert quote_ref_id(Legacy()) == 75563830
+
+    def test_official_quoteinfo_has_no_message_seq_attribute(self):
+        """把「它没有 message_seq」钉住，谁再写 reply.message_seq 会在这里想起原因。"""
+        assert not hasattr(QuoteInfo(), "message_seq")
+
+    def test_returns_none_when_nothing_usable(self):
+        from prompt_builder import quote_ref_id
+
+        assert quote_ref_id(QuoteInfo()) is None
+        assert quote_ref_id(object()) is None
+
+    def test_resolve_quote_survives_a_real_quoteinfo(self):
+        """端到端回归：真实 QuoteInfo 走一遍 resolve_quote，不能抛 AttributeError。"""
+        from prompt_builder import resolve_quote
+
+        seen: list = []
+
+        def lookup(mid):
+            seen.append(mid)
+            return {"text": "机器人说给小明的话", "user_name": "", "is_own": True,
+                    "target_name": "小明"}
+
+        note = resolve_quote(QuoteInfo(message_id="ROBOT1.0_a"), is_own=False,
+                             lookup=lookup, current_user="小红")
+        assert seen == ["ROBOT1.0_a"], "反查必须真的用官方 message_id 调一次"
+        assert "小明" in note
+
+    def test_resolve_quote_with_empty_text_but_an_id_still_looks_up(self):
+        """只有索引没有正文时（ref_msg_idx 单独出现）也要去反查。"""
+        from prompt_builder import resolve_quote
+
+        def lookup(mid):
+            return {"text": "被引用的原话", "user_name": "小红", "is_own": False,
+                    "target_name": ""}
+
+        note = resolve_quote(QuoteInfo(message_id="TMP_1"), is_own=False,
+                             lookup=lookup)
+        assert "被引用的原话" in note
 
 
 class TestReplySequencing:

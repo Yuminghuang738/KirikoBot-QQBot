@@ -933,24 +933,42 @@ class DatabaseManager:
             "repeats": pressure["repeats"],
         }
 
-    def find_quoted(self, group_id: str | None, message_id: Any) -> dict[str, Any] | None:
-        """Resolve a quoted message id to its text and author.
+    def find_quoted(self, group_id: str | None, message_id: Any,
+                    quoted_text: str = "") -> dict[str, Any] | None:
+        """Resolve a quoted message to its text, author, and addressee.
 
-        This exists because the `reply` segment carries **only the id** —
-        `{"type": "reply", "data": {"id": "ROBOT1.0_xxx.yyy!zzz"}}`, with no
-        text, no sender and no segments. Our own tables already hold
-        everything: `bot_messages` for the bot's own lines, `group_messages`
-        for everyone else's.
+        Why this exists: on OneBot the `reply` segment carried **only the id**
+        (no text, no sender), so the quoted content had to be reconstructed
+        from our own tables.
+
+        官方平台不一样：事件里**直接带**被引正文和作者昵称（见
+        `qq_official._extract_quote`），但它带不出最要紧的那一条 ——
+        「那句话当初是说给谁的」。所以要拿 id 回来查 `bot_messages`。
 
         `message_id` is used verbatim: the official platform's ids are strings,
         so casting with `int()` would raise and silently degrade every lookup
         into a miss. None / "" still short-circuits, so the value can never
-        turn into a SQL `= NULL` that matches nothing (or worse, everything).
-        """
-        if message_id is None or message_id == "":
-            return None
-        mid = message_id
+        turn into a SQL `= NULL` (which matches nothing, or worse, everything).
 
+        `quoted_text` 是**兜底**，而且是常用路径：官方事件里引用带的索引是
+        `ref_msg_idx=TMP_...` 这种形式，和我们存的 `ROBOT1.0_...` 消息 id
+        **不是同一套编号**（见官方文档 group_at_message_create 的示例三），
+        所以按 id 查多半查不到。但事件给了被引正文，而机器人自己的发言正文
+        我们是有记录的 —— 用正文精确匹配就能既认出「这是我说的」，又拿到
+        收件人。阈值沿用 `QQOfficialClient.is_own_message` 的 6 字符护栏，
+        避免一句话短到到处都能撞上。
+        """
+        if message_id is not None and message_id != "":
+            found = self._find_quoted_by_id(group_id, message_id)
+            if found is not None:
+                return found
+
+        needle = " ".join((quoted_text or "").split())
+        if len(needle) >= 6:
+            return self._find_quoted_by_text(group_id, needle)
+        return None
+
+    def _find_quoted_by_id(self, group_id: str | None, mid: Any) -> dict[str, Any] | None:
         # The bot's lines first: telling "they are quoting ME" apart from
         # "they are quoting someone else" is the whole point of the feature.
         #
@@ -987,6 +1005,32 @@ class DatabaseManager:
             return {"text": rows[0][0] or "", "user_name": rows[0][1] or "",
                     "is_own": False, "target_name": ""}
         return None
+
+    def _find_quoted_by_text(self, group_id: str | None,
+                             needle: str) -> dict[str, Any] | None:
+        """按正文反查**机器人自己**说过的话（拿回收件人）。
+
+        只在 id 查不到时走这里。不查 `group_messages`：那一边的正文是群友发的，
+        而这里要回答的问题是「被引的是不是我自己说的、说给谁的」。正文已经由
+        事件给出了，不需要再还原一遍。
+        """
+        sql = ("SELECT target_user_id FROM bot_messages "
+               "WHERE recalled = 0 AND text = ?")
+        params: list[Any] = [needle]
+        if group_id is not None:
+            sql += " AND group_id = ?"
+            params.append(group_id)
+        sql += " ORDER BY id DESC LIMIT 1"
+        try:
+            rows = self.fetch_data(sql, tuple(params))
+        except sqlite3.Error:
+            logger.debug("find_quoted text lookup failed", exc_info=True)
+            return None
+        if not rows:
+            return None
+        target_id = str(rows[0][0] or "")
+        return {"text": needle, "user_name": "", "is_own": True,
+                "target_name": self._resolve_user_name(group_id, target_id)}
 
     def fetch_quoted_target(self, group_id: str | None, message_id: Any) -> str:
         """Raw addressee id recorded for one of our own messages (debug/tests)."""
