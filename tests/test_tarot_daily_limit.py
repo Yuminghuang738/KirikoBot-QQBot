@@ -115,15 +115,15 @@ class TestTheToolHonoursTheLimit:
                 return True
 
         robot = self._Robot()
-        robot.llbot = LLBot()
+        robot.client = LLBot()
 
         tool.tarot_call(robot, self._AI())
 
         assert not drawn, "must not draw a new card"
-        assert robot.llbot.sent, "the card must still be sent again"
+        assert robot.client.sent, "the card must still be sent again"
         text = "".join(
             seg.get("data", {}).get("text", "")
-            for msg in robot.llbot.sent for seg in msg if seg.get("type") == "text"
+            for msg in robot.client.sent for seg in msg if seg.get("type") == "text"
         )
         assert "愚者_正位" in text
         assert "世界_正位" not in text
@@ -147,7 +147,7 @@ class TestTheToolHonoursTheLimit:
                 return True
 
         robot = self._Robot()
-        robot.llbot = LLBot()
+        robot.client = LLBot()
         tool.tarot_call(robot, self._AI())
         assert not resent, "nothing drawn today, so no 'already drawn' path"
 
@@ -168,7 +168,7 @@ class TestTheToolHonoursTheLimit:
                 return True
 
         robot = self._Robot()
-        robot.llbot = LLBot()
+        robot.client = LLBot()
         tool._resend_today(robot, ai, db.get_today_tarot("u1"), "小明", True)
         assert "今天只能抽一次" in ai.user_text
         assert "抽到什么就是什么" in ai.user_text

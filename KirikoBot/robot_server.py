@@ -3,17 +3,17 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from llbot_client import IncomingMessage, LLBotClient, MessageBuilder
+from qq_official import IncomingMessage, MessageBuilder, QQOfficialClient
 
 logger = logging.getLogger(__name__)
 
 
 class RobotServer:
-    """Thin wrapper: parses incoming messages and delegates sending to LLBotClient."""
+    """Thin wrapper: parses incoming messages and delegates sending to QQOfficialClient."""
 
-    def __init__(self, msg_data: dict[str, Any], llbot: LLBotClient, bot_qq: str) -> None:
-        self.llbot = llbot
-        self.incoming = IncomingMessage.from_onebot(msg_data, bot_qq)
+    def __init__(self, msg_data: dict[str, Any], client: QQOfficialClient, bot_qq: str) -> None:
+        self.client = client
+        self.incoming = IncomingMessage.from_event(msg_data, bot_qq)
         self.text: str = ""
         self.image_path: str = ""
 
@@ -68,27 +68,27 @@ class RobotServer:
 
     def reply(self, text: str) -> bool:
         """Reply to incoming message. Groups: reply+@user+text. Private: reply+text."""
-        return self.llbot.reply_to(self.incoming, text)
+        return self.client.reply_to(self.incoming, text)
 
     def send_text(self, text: str) -> bool:
         """Send plain text without @ prefix."""
-        return self.llbot.send_text(self.incoming, text)
+        return self.client.send_text(self.incoming, text)
 
     def reply_image(self, path: str) -> bool:
         """Send image as reply."""
-        return self.llbot.reply_image(self.incoming, path)
+        return self.client.reply_image(self.incoming, path)
 
     def send_group(self) -> bool:
         """Compat: send via msg_list attr (used by old MsgPackage flow)."""
         if not hasattr(self, "msg_list") or not self.msg_list:
             return False
         if self.msg_type == "group":
-            return self.llbot.send_group_msg(self.group_id or "", self.msg_list)
+            return self.client.send_group_msg(self.group_id or "", self.msg_list)
         else:
-            return self.llbot.send_private_msg(self.user_id, self.msg_list)
+            return self.client.send_private_msg(self.user_id, self.msg_list)
 
     def send_private(self) -> bool:
         """Compat: send private via msg_list."""
         if not hasattr(self, "msg_list") or not self.msg_list:
             return False
-        return self.llbot.send_private_msg(self.user_id, self.msg_list)
+        return self.client.send_private_msg(self.user_id, self.msg_list)

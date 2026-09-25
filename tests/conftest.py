@@ -16,9 +16,9 @@ APP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 sys.path.insert(0, APP_DIR)
 
 # Config.validate() runs at import time and requires these.
-os.environ.setdefault("ROBOT_QQ", "10000")
-os.environ.setdefault("ONEBOT_API", "http://localhost:3000")
-os.environ.setdefault("ONEBOT_TOKEN", "test-token")
+# 官方平台取代了 OneBot：凭据变成 AppID + AppSecret。
+os.environ.setdefault("QQ_APP_ID", "10000")
+os.environ.setdefault("QQ_APP_SECRET", "test-secret")
 os.environ.setdefault("DEEPSEEK_TOKEN", "sk-test")
 os.environ.setdefault("GROUP_ROLE", "测试角色")
 os.environ.setdefault("PRIVATE_ROLE", "测试角色")

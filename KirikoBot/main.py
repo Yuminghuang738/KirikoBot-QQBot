@@ -34,7 +34,6 @@ from config import Config
 import ai_metrics
 import dashboard_auth
 from chat_history import load_history, save_turn
-import webhook_auth
 from prompt_builder import (
     build_role_prompt,
     deflection_for,
@@ -54,7 +53,8 @@ from feature_gate import (
 from extra_services import HitokotoService, BilibiliTrending
 from hot_news import HotNewsScraper
 from judge_service import JudgeService
-from llbot_client import LLBotClient, MessageBuilder
+from qq_gateway import GatewayClient
+from qq_official import MessageBuilder, QQOfficialClient
 from llbot_webui import llbot_bp
 from msg_package import MsgPackage
 from amp_head_crawler import AmpHeadCrawler
@@ -100,7 +100,7 @@ _battle_lock = threading.Lock()
 BATTLE_TIMEOUT = 60  # seconds before battle auto-ends
 
 # ── Services ────────────────────────────────────────────
-llbot = LLBotClient(Config.ONEBOT_API or "http://llbot:3000", Config.ONEBOT_TOKEN or "")
+client = QQOfficialClient(Config.QQ_APP_ID or "", Config.QQ_APP_SECRET or "")
 db = DatabaseManager()
 feature_gate = FeatureGate(db)
 pkg = MsgPackage()
@@ -114,14 +114,14 @@ web_search = WebSearch()
 web_search_tool = WebSearchTool(web_search, pkg)
 weather_tool = WeatherTool(WeatherService(), pkg)
 sticker_tool = StickerTool(pkg)
-sticker_battle_tool = StickerBattleTool(pkg, llbot, sticker_tool, _battle_state)
+sticker_battle_tool = StickerBattleTool(pkg, client, sticker_tool, _battle_state)
 hitokoto_service = HitokotoService()
 amp_head_crawler = AmpHeadCrawler(db)
 hitokoto_tool = HitokotoTool(hitokoto_service, pkg)
 food_picker_tool = FoodPickerTool(pkg)
 dice_tool = DiceTool(pkg)
 bilibili_tool = BilibiliTool(BilibiliTrending(), pkg)
-at_member_tool = AtMemberTool(pkg, db, llbot)
+at_member_tool = AtMemberTool(pkg, db, client)
 reminder_tool = ReminderTool(db, pkg)
 list_reminders_tool = ListRemindersTool(db, pkg)
 delete_reminder_tool = DeleteReminderTool(db, pkg)
@@ -135,7 +135,7 @@ music_service = MusicService()
 music_tool = MusicTool(music_service, pkg)
 hot_news_scraper = HotNewsScraper()
 
-scheduler = BotScheduler(db, llbot, political_news_scraper, news_crawler, hitokoto_service, feature_gate,
+scheduler = BotScheduler(db, client, political_news_scraper, news_crawler, hitokoto_service, feature_gate,
                          amp_crawler=amp_head_crawler)
 scheduler.start()
 sticker_collector = StickerCollector(db=db)
@@ -145,34 +145,32 @@ affection_service = AffectionService()
 judge_service = JudgeService(learning_service)
 affection_tool = AffectionTool(pkg, db)
 affection_leaderboard_tool = AffectionLeaderboardTool(pkg, db)
-recall_tool = RecallMessageTool(db, llbot)
+recall_tool = RecallMessageTool(db, client)
 group_stats_tool = GroupStatsTool(db, pkg)
 read_context_tool = ReadContextTool(db, pkg)
 feature_list_tool = FeatureListTool(db, pkg)
 explain_self_tool = ExplainSelfTool(db, pkg)
-voice_tool = VoiceTool(db, pkg, llbot)
+voice_tool = VoiceTool(db, pkg, client)
 similar_sticker_tool = SimilarStickerTool(sticker_collector, pkg)
 
 # Persist the bot's own outgoing messages so transcripts are complete and
 # "recall the last thing I said" works across restarts.
-llbot.set_recorder(db.record_bot_message)
+client.set_recorder(db.record_bot_message)
 
 # Every DeepSeek call (chat / background jobs / vision) is recorded for the
 # dashboard's usage page. Never on the critical path — metrics failures are
 # swallowed inside ai_metrics.
 if Config.AI_METRICS_ENABLED:
     ai_metrics.set_sink(db.record_ai_call)
-version_manager = VersionManager(db, llbot)
+version_manager = VersionManager(db, client)
 version_manager.seed_initial_version()
 
-# Security posture, stated once at boot so a weakened config is never silent.
-if not Config.WEBHOOK_TOKEN:
-    logger.warning(
-        "WEBHOOK_TOKEN / ONEBOT_TOKEN 未配置：/webhook 不校验签名，"
-        "任何能访问本端口的人都能伪造消息让机器人发言。"
-    )
-else:
-    logger.info("Webhook 签名校验已启用（x-signature / HMAC-SHA1）")
+# 安全姿态明说一次：官方平台的防线是「出站 WebSocket + access_token」，
+# 不再有需要校验签名的入站 webhook。面板本身仍有 Basic 鉴权。
+logger.info(
+    "接入方式：QQ 官方平台 WebSocket（出站长连接）。"
+    "没有入站 webhook 路由，机器人只应答官方推送过来的 @ 消息。"
+)
 
 # Dedicated logger for thinking chains — propagates to root (SSE + stdout)
 think_log = logging.getLogger("think")
@@ -258,7 +256,7 @@ def _seed_group(gid: str) -> None:
         return
     _seeded_groups.add(gid)
     try:
-        members = llbot.get_group_member_list(gid)
+        members = client.get_group_member_list(gid)
         if members:
             db.seed_group_members(gid, members)
     except Exception:
@@ -301,7 +299,7 @@ def _reply_note(robot: RobotServer) -> str:
         return ""
 
     try:
-        is_own = llbot.is_own_message(reply.message_seq, reply.text)
+        is_own = client.is_own_message(reply.message_seq, reply.text)
     except Exception:
         logger.debug("is_own_message failed", exc_info=True)
         is_own = False
@@ -583,14 +581,14 @@ def _process_battle_round(robot: RobotServer, battle_key: str, battle: dict, ima
 
                 if chosen:
                     battle.setdefault("used_stickers", []).append(chosen)
-                    from llbot_client import MessageBuilder
+                    from qq_official import MessageBuilder
                     builder = MessageBuilder()
                     builder.image(f"{stickerdir}/{chosen}")
                     builder.text(f"\n{comeback}")
                     if robot.msg_type == "group":
-                        robot.llbot.send_group_msg(robot.group_id or "", builder.build())
+                        robot.client.send_group_msg(robot.group_id or "", builder.build())
                     else:
-                        robot.llbot.send_private_msg(robot.user_id, builder.build())
+                        robot.client.send_private_msg(robot.user_id, builder.build())
             except Exception:
                 logger.exception("Failed to send counter-sticker in battle")
 
@@ -1413,10 +1411,10 @@ def api_digest_push():
     success = 0
     for gid in groups:
         try:
-            from llbot_client import MessageBuilder
+            from qq_official import MessageBuilder
             builder = MessageBuilder()
             builder.text(message)
-            llbot.send_group_msg(gid, builder.build())
+            client.send_group_msg(gid, builder.build())
             success += 1
         except Exception:
             logger.exception("Failed to send digest to group %s", gid)
@@ -1792,7 +1790,7 @@ def _list_groups() -> list[dict]:
         # Get group name from cache or API
         gname = ""
         try:
-            info = llbot.get_group_info(gid)
+            info = client.get_group_info(gid)
             gname = info.get("group_name", "") if info else ""
         except Exception:
             logger.debug("main._list_groups 忽略了异常", exc_info=True)
@@ -1829,7 +1827,7 @@ def api_group_delete(group_id: str):
     leave_error = ""
     if leave:
         try:
-            left = bool(llbot.call("set_group_leave",
+            left = bool(client.call("set_group_leave",
                                    {"group_id": str(group_id), "is_dismiss": False}))
             if not left:
                 leave_error = "LLBot 调用失败"
@@ -2036,56 +2034,26 @@ def api_settings_delete(scope_type: str, scope_id: str):
 def serve_sticker(filename: str):
     return send_from_directory(STICKER_DIR, filename)
 
-def _webhook_signature_ok(raw_body: bytes) -> bool:
-    """Verify LLBot's `x-signature` on an incoming event.
 
-    The signing scheme lives in webhook_auth (dependency-free, unit tested);
-    here we only bind it to the request. Returns True when no token is
-    configured — an unauthenticated webhook must not silently break a running
-    bot, but it is called out loudly at startup.
+def _on_gateway_event(event: dict[str, Any]) -> None:
+    """官方 WebSocket 事件 → RobotServer → 业务逻辑。
+
+    原来这里是 Flask 的 `/webhook` 路由（LLBot 主动推给我们）。
+    官方平台方向相反，事件从我们维持的 WS 长连接里出来，所以改成
+    由网关线程回调到这里。**校验签名那套也随之作废** ——
+    连接本身已经用 access_token 认证过了。
     """
-    return webhook_auth.signature_ok(
-        Config.WEBHOOK_TOKEN, raw_body, request.headers.get("X-Signature")
-    )
-
-
-@app.route("/webhook", methods=["POST"])
-@app.route("/", methods=["POST"])
-def receive():
-    # Read the raw body first: the signature is over the exact bytes sent.
-    if not _webhook_signature_ok(request.get_data(cache=True)):
-        logger.warning(
-            "Rejected webhook without a valid signature from %s "
-            "(check that LLBot's http-post token matches WEBHOOK_TOKEN/ONEBOT_TOKEN)",
-            request.remote_addr,
-        )
-        return jsonify({"status": "unauthorized"}), 403
-
-    msg_data = request.json
-    if not msg_data: return jsonify({"status": "nodata"}), 400
-
-    # ── Only process message events; skip notices (recalls, pokes, etc.) ──
-    post_type = msg_data.get("post_type", "message")
-    if post_type != "message":
-        # Log recall events for debugging but don't process them
-        notice_type = msg_data.get("notice_type", "")
-        if notice_type:
-            logger.info(
-                "Ignoring notice event: type=%s user=%s group=%s",
-                notice_type, msg_data.get("user_id", ""), msg_data.get("group_id", ""),
-            )
-        return jsonify({"status": "ignored", "reason": f"post_type={post_type}"}), 200
-
-    if msg_data.get("message_type") == "group":
-        gid = str(msg_data.get("group_id") or "")
-        if gid and feature_gate.is_enabled("group", gid, "sticker_collect"):
-            executor.submit(sticker_collector.collect, msg_data)
     try:
-        robot = RobotServer(msg_data, llbot, Config.ROBOT_QQ or "")
+        robot = RobotServer(event, client, Config.ROBOT_QQ or "")
     except Exception:
-        return jsonify({"status": "error"}), 400
+        logger.exception("事件解析失败：%s", str(event)[:160])
+        return
     executor.submit(main_logic, robot)
-    return jsonify({"status": "success"}), 200
+
+
+gateway = GatewayClient(lambda: client.access_token, _on_gateway_event)
+gateway.start()
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=False)

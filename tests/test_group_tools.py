@@ -296,7 +296,7 @@ class TestExplainSelfRawDump:
         msg_type, group_id, user_id, user_name = "group", "g1", "u1", "小明"
 
         def __init__(self, llbot):
-            self.llbot = llbot
+            self.client = llbot
             self.incoming = TestExplainSelfRawDump._Incoming()
 
     class _AI:

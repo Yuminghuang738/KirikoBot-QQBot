@@ -20,12 +20,12 @@ class BotScheduler:
     AMP_CRAWL_INTERVAL_DAYS = 7
 
     def __init__(
-        self, db: Any, llbot: Any, political_news: Any, news_crawler: Any,
+        self, db: Any, client: Any, political_news: Any, news_crawler: Any,
         hitokoto_service: Any = None, feature_gate: Any = None,
         amp_crawler: Any = None,
     ) -> None:
         self.db = db
-        self.llbot = llbot
+        self.client = client
         self.political_news = political_news
         self.news_crawler = news_crawler
         self.hitokoto_service = hitokoto_service
@@ -102,14 +102,14 @@ class BotScheduler:
                 self._finalize_reminder(rid, remind_time, repeat_daily)
                 return
 
-        from llbot_client import MessageBuilder
+        from qq_official import MessageBuilder
         builder = MessageBuilder()
         if gid:
             builder.at(uid).text(f" ⏰ 提醒：{content}")
-            self.llbot.send_group_msg(gid, builder.build())
+            self.client.send_group_msg(gid, builder.build())
         else:
             builder.text(f"⏰ 提醒：{content}")
-            self.llbot.send_private_msg(uid, builder.build())
+            self.client.send_private_msg(uid, builder.build())
 
         self._finalize_reminder(rid, remind_time, repeat_daily)
         logger.info("Fired reminder #%d for %s: %s", rid, uname, content[:40])
@@ -209,10 +209,10 @@ class BotScheduler:
 
             lines.append("祝大家今天元气满满！💪✨")
 
-            from llbot_client import MessageBuilder
+            from qq_official import MessageBuilder
             builder = MessageBuilder()
             builder.text("\n".join(lines))
-            self.llbot.send_group_msg(gid, builder.build())
+            self.client.send_group_msg(gid, builder.build())
             logger.info("Morning greeting sent to %s", gid)
 
 
@@ -321,11 +321,11 @@ class BotScheduler:
 
             if not text:
                 return
-            from llbot_client import MessageBuilder
+            from qq_official import MessageBuilder
             # Builders return a plain string, except the roll call which needs
             # @ segments and returns a pre-built message list.
             message = text if isinstance(text, list) else MessageBuilder().text(text).build()
-            self.llbot.send_group_msg(group_id, message)
+            self.client.send_group_msg(group_id, message)
             logger.info("Subscription push '%s' sent to %s", topic, group_id)
         except Exception:
             logger.exception("Subscription push '%s' failed for %s", topic, group_id)
@@ -449,7 +449,7 @@ class BotScheduler:
             return "📣 今天群里好安静呀，一个人都没说话……明天记得来聊天哦 (｡•́︿•̀｡)"
 
         top = stats.get("top", [])[:3]
-        from llbot_client import MessageBuilder
+        from qq_official import MessageBuilder
         builder = MessageBuilder()
         builder.text(f"📣 今日发言榜（共 {total} 条 · {stats['active_users']} 人参与）\n\n")
         for i, item in enumerate(top, 1):

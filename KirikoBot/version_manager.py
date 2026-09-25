@@ -4,7 +4,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from llbot_client import MessageBuilder
+from qq_official import MessageBuilder
 
 logger = logging.getLogger(__name__)
 
@@ -12,9 +12,9 @@ logger = logging.getLogger(__name__)
 class VersionManager:
     """Manage app versions, changelog entries, and group notifications."""
 
-    def __init__(self, db: Any, llbot: Any) -> None:
+    def __init__(self, db: Any, client: Any) -> None:
         self.db = db
-        self.llbot = llbot
+        self.client = client
 
     # ── Current version ─────────────────────────────────
 
@@ -317,7 +317,7 @@ class VersionManager:
             try:
                 builder = MessageBuilder()
                 builder.text(message)
-                self.llbot.send_group_msg(gid, builder.build())
+                self.client.send_group_msg(gid, builder.build())
                 success_count += 1
                 logger.info("Version notification sent to group %s", gid)
             except Exception:
@@ -389,7 +389,7 @@ class VersionManager:
             try:
                 builder = MessageBuilder()
                 builder.text(message)
-                self.llbot.send_group_msg(gid, builder.build())
+                self.client.send_group_msg(gid, builder.build())
                 success_count += 1
                 logger.info("Changelog notification sent to group %s", gid)
             except Exception:

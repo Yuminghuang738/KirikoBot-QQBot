@@ -113,3 +113,5 @@ llbot-docker.sh
 # The copy under KirikoBot/ is a stale leftover from an older layout; the
 # compose file actually in use lives at the repository root.
 KirikoBot/docker-compose.yml
+# 探测脚本 dump 出来的原始事件（含 openid，不该进仓库）
+*.jsonl

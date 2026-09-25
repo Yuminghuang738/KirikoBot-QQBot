@@ -59,7 +59,7 @@ class Tarot:
     def _resend_today(self, robot: Any, ai: Any, card: dict[str, Any],
                       display_name: str, is_for_self: bool) -> None:
         """Tell them they already drew today, and show that same card again."""
-        from llbot_client import MessageBuilder
+        from qq_official import MessageBuilder
 
         builder = MessageBuilder()
         if not is_for_self:
@@ -70,9 +70,9 @@ class Tarot:
         if card.get("card_text"):
             builder.text(f"\n{card['card_text']}")
         if robot.msg_type == "group":
-            robot.llbot.send_group_msg(robot.group_id or "", builder.build())
+            robot.client.send_group_msg(robot.group_id or "", builder.build())
         else:
-            robot.llbot.send_private_msg(robot.user_id, builder.build())
+            robot.client.send_private_msg(robot.user_id, builder.build())
 
         ai.model_type = Config.DEEPSEEK_MODEL
         ai.thinking_type = "disabled"
@@ -89,9 +89,9 @@ class Tarot:
         if ai.ai_text:
             reply = MessageBuilder().text(ai.ai_text.strip())
             if robot.msg_type == "group":
-                robot.llbot.send_group_msg(robot.group_id or "", reply.build())
+                robot.client.send_group_msg(robot.group_id or "", reply.build())
             else:
-                robot.llbot.send_private_msg(robot.user_id, reply.build())
+                robot.client.send_private_msg(robot.user_id, reply.build())
 
     def tarot_call(self, robot: Any, ai: Any) -> None:
         tool_calls = ai.ai_message.get("tool_calls")
@@ -128,7 +128,7 @@ class Tarot:
         card = self._draw_card()
 
         # Send card image + name
-        from llbot_client import MessageBuilder
+        from qq_official import MessageBuilder
         builder = MessageBuilder()
         if not is_for_self and target_name:
             builder.text(f"🔮 应 {robot.user_name} 的要求，给 {target_name} 抽了一张塔罗牌！\n\n")
@@ -136,9 +136,9 @@ class Tarot:
             builder.image(card["card_path"])
         builder.text(f"\n🎴 {display_name}的塔罗牌：{card['card_name']}\n{card['card_text']}")
         if robot.msg_type == "group":
-            robot.llbot.send_group_msg(robot.group_id or "", builder.build())
+            robot.client.send_group_msg(robot.group_id or "", builder.build())
         else:
-            robot.llbot.send_private_msg(robot.user_id, builder.build())
+            robot.client.send_private_msg(robot.user_id, builder.build())
 
         # AI interpretation
         ai.model_type = Config.DEEPSEEK_MODEL
@@ -158,9 +158,9 @@ class Tarot:
                 reply_builder.text(f"@{target_name} ")
             reply_builder.text(ai.ai_text.strip())
             if robot.msg_type == "group":
-                robot.llbot.send_group_msg(robot.group_id or "", reply_builder.build())
+                robot.client.send_group_msg(robot.group_id or "", reply_builder.build())
             else:
-                robot.llbot.send_private_msg(robot.user_id, reply_builder.build())
+                robot.client.send_private_msg(robot.user_id, reply_builder.build())
 
         # Deposit history for the REQUESTER (not target)
         try:
@@ -393,12 +393,12 @@ class StickerTool:
             chosen = random.choice(stickers)
 
         # Send image directly, no reply wrapper
-        from llbot_client import MessageBuilder
+        from qq_official import MessageBuilder
         builder = MessageBuilder().image(f"{self.STICKER_DIR}/{chosen}")
         if robot.msg_type == "group":
-            robot.llbot.send_group_msg(robot.group_id or "", builder.build())
+            robot.client.send_group_msg(robot.group_id or "", builder.build())
         else:
-            robot.llbot.send_private_msg(robot.user_id, builder.build())
+            robot.client.send_private_msg(robot.user_id, builder.build())
         _set_tool_meta(ai, tool_calls)
         ai.user_text = f"发送了表情包({category or '随机'}): {chosen}"
 
@@ -515,10 +515,10 @@ class BilibiliTool:
 # ══════════════════════════════════════════════════════════
 
 class AtMemberTool:
-    def __init__(self, msg_package: Any, database_manager: Any = None, llbot: Any = None) -> None:
+    def __init__(self, msg_package: Any, database_manager: Any = None, client: Any = None) -> None:
         self.msg_package = msg_package
         self.db = database_manager
-        self.llbot = llbot
+        self.client = client
 
     def _resolve_target(self, robot: Any, target: str) -> tuple[str | None, str | None]:
         """Resolve target to (qq_number, display_name).
@@ -531,8 +531,8 @@ class AtMemberTool:
 
         # ── 群主 → use LLBot get_group_info API ──
         if target == "群主":
-            if self.llbot and group_id:
-                info = self.llbot.get_group_info(group_id)
+            if self.client and group_id:
+                info = self.client.get_group_info(group_id)
                 if info:
                     owner_uid = str(info.get("owner_id", "") or info.get("owner_user_id", ""))
                     if owner_uid:
@@ -616,19 +616,19 @@ class AtMemberTool:
         content = ai.ai_text.strip() if ai.ai_text else message
 
         # Use proper OneBot at segment with QQ number
-        from llbot_client import MessageBuilder
+        from qq_official import MessageBuilder
         builder = MessageBuilder()
         builder.at(target_qq)
         builder.text(f" {content}")
 
         if robot.msg_type == "group":
-            robot.llbot.send_group_msg(robot.group_id or "", builder.build())
+            robot.client.send_group_msg(robot.group_id or "", builder.build())
         else:
             # Private context: at_member is a group-only feature.
             # Send plain text without invalid @-segment.
             pm_builder = MessageBuilder()
             pm_builder.text(f"想对 {display_name} 说：{content}")
-            robot.llbot.send_private_msg(robot.user_id, pm_builder.build())
+            robot.client.send_private_msg(robot.user_id, pm_builder.build())
 
         _set_tool_meta(ai, tool_calls)
         ai.user_text = f"@了{display_name}({target_qq}): {content}"
@@ -1007,7 +1007,7 @@ class MusicTool:
         if not keyword:
             keyword = robot.msg
 
-        from llbot_client import MessageBuilder
+        from qq_official import MessageBuilder
         import time as _time
 
         # Search for the best matching song
@@ -1080,17 +1080,17 @@ class MusicTool:
         info_builder = MessageBuilder()
         info_builder.text("\n".join(info_lines))
         if robot.msg_type == "group":
-            robot.llbot.send_group_msg(robot.group_id or "", info_builder.build())
+            robot.client.send_group_msg(robot.group_id or "", info_builder.build())
         else:
-            robot.llbot.send_private_msg(robot.user_id, info_builder.build())
+            robot.client.send_private_msg(robot.user_id, info_builder.build())
 
         # Send the music share card — this renders as a beautiful playable card in QQ
         music_builder = MessageBuilder()
         music_builder.music(music_type, str(song_id))
         if robot.msg_type == "group":
-            robot.llbot.send_group_msg(robot.group_id or "", music_builder.build())
+            robot.client.send_group_msg(robot.group_id or "", music_builder.build())
         else:
-            robot.llbot.send_private_msg(robot.user_id, music_builder.build())
+            robot.client.send_private_msg(robot.user_id, music_builder.build())
 
         logger.info("Music shared: %s - %s (id=%s, type=%s)", name, artist, song_id, music_type)
 
@@ -1103,9 +1103,9 @@ class MusicTool:
                 record_builder = MessageBuilder()
                 record_builder.record(audio_path)
                 if robot.msg_type == "group":
-                    robot.llbot.send_group_msg(robot.group_id or "", record_builder.build())
+                    robot.client.send_group_msg(robot.group_id or "", record_builder.build())
                 else:
-                    robot.llbot.send_private_msg(robot.user_id, record_builder.build())
+                    robot.client.send_private_msg(robot.user_id, record_builder.build())
                 logger.info("Audio voice message also sent for %s - %s", name, artist)
         except Exception:
             logger.debug("ai_tools.music_search_call 忽略了异常", exc_info=True)
@@ -1138,9 +1138,9 @@ class StickerBattleTool:
         - total_score: accumulated score across rounds
     """
 
-    def __init__(self, msg_package: Any, llbot: Any, sticker_tool: StickerTool, battle_state: dict) -> None:
+    def __init__(self, msg_package: Any, client: Any, sticker_tool: StickerTool, battle_state: dict) -> None:
         self.msg_package = msg_package
-        self.llbot = llbot
+        self.client = client
         self.sticker_tool = sticker_tool
         self.battle_state = battle_state
 
@@ -1193,7 +1193,7 @@ class StickerBattleTool:
         self.battle_state[battle_key] = battle
 
         # Send first sticker + challenge message
-        from llbot_client import MessageBuilder
+        from qq_official import MessageBuilder
         builder = MessageBuilder()
         builder.image(f"{self.sticker_tool.STICKER_DIR}/{chosen}")
         challenge = random.choice([
@@ -1204,9 +1204,9 @@ class StickerBattleTool:
         ])
         builder.text(f"\n{challenge} (第1/{BATTLE_DEFAULT_ROUNDS}轮)")
         if robot.msg_type == "group":
-            self.llbot.send_group_msg(robot.group_id or "", builder.build())
+            self.client.send_group_msg(robot.group_id or "", builder.build())
         else:
-            self.llbot.send_private_msg(robot.user_id, builder.build())
+            self.client.send_private_msg(robot.user_id, builder.build())
 
         logger.info("Battle started for %s (key=%s), first sticker: %s", robot.user_name, battle_key, chosen)
 
@@ -1331,9 +1331,9 @@ class RecallMessageTool:
 
     RECALL_WINDOW = 110  # seconds, comfortably inside QQ's ~2 minute limit
 
-    def __init__(self, database_manager: Any, llbot: Any) -> None:
+    def __init__(self, database_manager: Any, client: Any) -> None:
         self.db = database_manager
-        self.llbot = llbot
+        self.client = client
 
     def recall_message_call(self, robot: Any, ai: Any) -> None:
         _set_tool_meta(ai, ai.ai_message.get("tool_calls"))
@@ -1352,7 +1352,7 @@ class RecallMessageTool:
             ai.user_text = ai.tool_result_text
             return
 
-        if self.llbot.recall(last["message_id"]):
+        if self.client.recall(last["message_id"]):
             self.db.mark_bot_message_recalled(last["message_id"])
             preview = (last["text"] or "").strip()[:20]
             logger.info("Recalled own message %s in group %s", last["message_id"], robot.group_id)
@@ -1726,7 +1726,7 @@ class ExplainSelfTool:
         return chunks or [text]
 
     def _send(self, robot: Any, text: str) -> None:
-        from llbot_client import MessageBuilder
+        from qq_official import MessageBuilder
 
         chunks = self._split(text)
         total = len(chunks)
@@ -1739,9 +1739,9 @@ class ExplainSelfTool:
             builder.text(body)
             try:
                 if robot.msg_type == "group":
-                    robot.llbot.send_group_msg(robot.group_id or "", builder.build())
+                    robot.client.send_group_msg(robot.group_id or "", builder.build())
                 else:
-                    robot.llbot.send_private_msg(robot.user_id, builder.build())
+                    robot.client.send_private_msg(robot.user_id, builder.build())
             except Exception:
                 logger.exception("explain_self send failed")
                 return
@@ -1763,10 +1763,10 @@ class VoiceTool:
     deliver, which would look like the bot ignoring people.
     """
 
-    def __init__(self, database_manager: Any, msg_package: Any, llbot: Any = None) -> None:
+    def __init__(self, database_manager: Any, msg_package: Any, client: Any = None) -> None:
         self.db = database_manager
         self.msg_package = msg_package
-        self.llbot = llbot
+        self.client = client
 
     def voice_call(self, robot: Any, ai: Any) -> None:
         tool_calls = ai.ai_message.get("tool_calls")
@@ -1798,7 +1798,7 @@ class VoiceTool:
         character = self._validated_character(character)
 
         try:
-            ok = bool(self.llbot and self.llbot.send_ai_voice(
+            ok = bool(self.client and self.client.send_ai_voice(
                 robot.group_id, character, text))
         except Exception:
             logger.exception("voice send failed")
@@ -1822,7 +1822,7 @@ class VoiceTool:
     def _validated_character(self, wanted: str) -> str:
         """Return `wanted` if QQ offers it, else the configured default."""
         try:
-            available = {c["id"] for c in (self.llbot.get_ai_characters() if self.llbot else [])}
+            available = {c["id"] for c in (self.client.get_ai_characters() if self.client else [])}
         except Exception:
             logger.debug("character list unavailable", exc_info=True)
             return wanted or Config.VOICE_DEFAULT_CHARACTER
@@ -1914,12 +1914,12 @@ class SimilarStickerTool:
             return
 
         try:
-            from llbot_client import MessageBuilder
+            from qq_official import MessageBuilder
             builder = MessageBuilder().image(path)
             if robot.msg_type == "group":
-                robot.llbot.send_group_msg(robot.group_id or "", builder.build())
+                robot.client.send_group_msg(robot.group_id or "", builder.build())
             else:
-                robot.llbot.send_private_msg(robot.user_id, builder.build())
+                robot.client.send_private_msg(robot.user_id, builder.build())
             logger.info("Similar sticker sent: %s (distance %d)", best_file, best_dist)
             ai.tool_result_text = (
                 f"已经发出表情库里最像的一张（差异值 {best_dist}，越小越像）。"

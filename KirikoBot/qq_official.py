@@ -254,6 +254,12 @@ class QQOfficialClient:
         # 同一条消息的被动回复序号，msg_id + msg_seq 组合唯一
         self._reply_seq: dict[str, int] = {}
 
+    # ── 认证 ───────────────────────────────────────────────
+    @property
+    def access_token(self) -> str:
+        """给 WebSocket 网关用。自动处理续期。"""
+        return self._tokens.get()
+
     # ── HTTP ───────────────────────────────────────────────
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"QQBot {self._tokens.get()}",

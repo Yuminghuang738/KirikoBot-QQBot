@@ -9,6 +9,14 @@ load_dotenv()
 
 
 class Config:
+    # ── QQ 官方机器人平台 ─────────────────────────────
+    # 取代原来的 ONEBOT_API / ONEBOT_TOKEN。凭据在开放平台后台拿。
+    QQ_APP_ID: Final[str | None] = os.getenv("QQ_APP_ID")
+    QQ_APP_SECRET: Final[str | None] = os.getenv("QQ_APP_SECRET")
+    # 官方只给 openid，**拿不到真实 QQ 号**（实测 id/member_openid/
+    # union_openid 恒等，且没有 union_user_account）。ROBOT_QQ 因此只剩
+    # 「排除机器人自己」这一个用途，而官方事件里本来就有 author.bot，
+    # 所以它变成可选项。
     ROBOT_QQ: Final[str | None] = os.getenv("ROBOT_QQ")
     ONEBOT_API: Final[str | None] = os.getenv("ONEBOT_API")
     # QQ accounts to exclude from profiling, affection, and data collection
@@ -153,9 +161,8 @@ class Config:
     @classmethod
     def validate(cls) -> None:
         required: dict[str, str | None] = {
-            "ROBOT_QQ": cls.ROBOT_QQ,
-            "ONEBOT_API": cls.ONEBOT_API,
-            "ONEBOT_TOKEN": cls.ONEBOT_TOKEN,
+            "QQ_APP_ID": cls.QQ_APP_ID,
+            "QQ_APP_SECRET": cls.QQ_APP_SECRET,
             "DEEPSEEK_TOKEN": cls.DEEPSEEK_TOKEN,
         }
         missing = [k for k, v in required.items() if not v]
