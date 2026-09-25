@@ -287,9 +287,29 @@ def main() -> None:
 
     app_id = os.environ.get("QQ_APP_ID") or ""
     secret = os.environ.get("QQ_APP_SECRET") or ""
+
+    # Prefer real env vars, but fall back to prompting. Typing the secret on
+    # the command line puts it in shell history and in `ps` output, and this is
+    # a credential for an account that is already under scrutiny.
+    def _read_secret() -> str:
+        if sys.stdin.isatty():
+            import getpass
+            return getpass.getpass("AppSecret（输入时不回显）: ").strip()
+        # Not a terminal: allow `printf 'secret\n' | ...` so it still never
+        # appears in argv. /dev/null yields "" and falls through to the help.
+        return (sys.stdin.readline() or "").strip()
+
+    if not app_id:
+        app_id = (input("AppID: ").strip() if sys.stdin.isatty() else "")
+    if not secret:
+        secret = _read_secret()
+
     if not app_id or not secret:
-        log("需要环境变量 QQ_APP_ID 和 QQ_APP_SECRET")
-        log("  QQ_APP_ID=102818934 QQ_APP_SECRET=xxx python3 tools/qq_probe.py")
+        log("需要 AppID 和 AppSecret，两种给法：")
+        log("  A) 直接跑，按提示输入（推荐，不进 shell 历史）")
+        log("       python3 tools/qq_probe.py --watch 300")
+        log("  B) 用环境变量")
+        log("       QQ_APP_ID=102818934 QQ_APP_SECRET=xxx python3 tools/qq_probe.py")
         sys.exit(2)
 
     token = get_access_token(app_id, secret)
