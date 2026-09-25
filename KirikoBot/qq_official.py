@@ -409,32 +409,36 @@ class QQOfficialClient:
             self._remember(group_id, d["id"], text, target_user_id)
         return ok
 
-    def send_group_msg(self, group_id: str, message: Any) -> bool:
-        return self._send(f"/v2/groups/{group_id}/messages", message,
-                          group_id=group_id)
+    # ── 发送 ───────────────────────────────────────────────
+    #
+    # 官方平台**只能被动回复**：发消息必须带一条 5 分钟内的原消息 `msg_id`，
+    # 否则平台按「主动消息」处理并直接拒绝：
+    #
+    #     HTTP 400 {"message":"主动消息失败, 无权限","code":40034105}
+    #
+    # 所以这里**没有** `send_group_msg(group_id, ...)` / `send_private_msg(uid, ...)`
+    # 这种「给个 id 就发」的方法 —— 它们在官方平台上永远不可能成功。
+    # 之前留着它们当 OneBot 兼容垫片，结果所有自包含工具（塔罗/搜索/点歌/
+    # 新闻/一言/表情包…）全都在静默失败：工具执行了、消息被 400 退掉，
+    # 用户看到的是「机器人不回话」。
+    #
+    # 想发消息只有一条路：把**收到的那条消息**传进来。
 
-    def send_private_msg(self, user_id: str, message: Any) -> bool:
-        return self._send(f"/v2/users/{user_id}/messages", message,
-                          target_user_id=user_id)
-
-    def reply_to(self, msg: IncomingMessage, text: str) -> bool:
-        path = (f"/v2/groups/{msg.group_id}/messages" if msg.msg_type == "group"
-                else f"/v2/users/{msg.user_id}/messages")
-        return self._send(path, [{"type": "text", "data": {"text": text}}],
-                          reply_to=msg.message_id,
-                          group_id=msg.group_id, target_user_id=msg.user_id)
-
-    def reply_image(self, msg: IncomingMessage, path: str) -> bool:
+    def send(self, msg: IncomingMessage, message: Any) -> bool:
+        """按被动回复发送任意段列表（文本 / 图片 / 混合）。"""
         api = (f"/v2/groups/{msg.group_id}/messages" if msg.msg_type == "group"
                else f"/v2/users/{msg.user_id}/messages")
-        return self._send(api, [{"type": "image", "data": {"file": path}}],
-                          reply_to=msg.message_id,
+        return self._send(api, message, reply_to=msg.message_id,
                           group_id=msg.group_id, target_user_id=msg.user_id)
 
+    def reply_to(self, msg: IncomingMessage, text: str) -> bool:
+        return self.send(msg, [{"type": "text", "data": {"text": text}}])
+
+    def reply_image(self, msg: IncomingMessage, path: str) -> bool:
+        return self.send(msg, [{"type": "image", "data": {"file": path}}])
+
     def send_text(self, msg: IncomingMessage, text: str) -> bool:
-        return (self.send_group_msg(msg.group_id, MessageBuilder().text(text))
-                if msg.msg_type == "group"
-                else self.send_private_msg(msg.user_id, MessageBuilder().text(text)))
+        return self.send(msg, MessageBuilder().text(text).build())
 
     # ── 富媒体 ─────────────────────────────────────────────
     def _upload_image(self, path: str, group_id: str,

@@ -361,3 +361,83 @@ class TestTokenKeeper:
         k._refresh_locked = lambda: "new"      # type: ignore[method-assign]
         k._token, k._expire_at = "old", _t.time() + 60   # 不足 5 分钟余量
         assert k.get() == "new"
+
+
+class TestPassiveSendIsTheOnlyWayOut:
+    """官方平台**只能被动回复**：不带原消息 `msg_id` 的发送一律被拒：
+
+        HTTP 400 {"message":"主动消息失败, 无权限","code":40034105}
+
+    这里锁住的是**线上真实踩过的坑**：自包含工具（塔罗 / 搜索 / 点歌 / 新闻 /
+    一言 / 表情包…）以前调 `client.send_group_msg(group_id, ...)` —— 那是 OneBot
+    时代的兼容垫片，不带 `msg_id`，于是在官方平台上全部静默 400：工具执行了、
+    消息被平台退掉，用户看到的是「机器人不回话」。
+    """
+
+    def _client(self):
+        c = QQOfficialClient.__new__(QQOfficialClient)
+        c._reply_seq = {}
+        import threading
+        c._sent_lock = threading.Lock()
+        c._recent_sent = []
+        c._recorder = None
+        c.captured = []
+
+        def fake_request(method, path, **kw):
+            c.captured.append((method, path, kw.get("json")))
+            return {"id": "ROBOT1.0_sent"}
+
+        c._request = fake_request
+        return c
+
+    def _msg(self, kind="group"):
+        return IncomingMessage(
+            msg_type=kind, user_id="U1",
+            group_id="G1" if kind == "group" else "",
+            message_id="ROBOT1.0_in.y!out", text="来张塔罗牌",
+            user_name="小明",
+        )
+
+    def test_group_send_carries_the_original_msg_id(self):
+        c = self._client()
+        assert c.send(self._msg(), MessageBuilder().text("你好").build()) is True
+        method, path, payload = c.captured[0]
+        assert method == "POST"
+        assert path == "/v2/groups/G1/messages"
+        assert payload["msg_id"] == "ROBOT1.0_in.y!out", "不带 msg_id 就会被当主动消息拒掉"
+        assert payload["msg_seq"] >= 1
+        assert payload["content"] == "你好"
+
+    def test_private_send_goes_to_the_user_endpoint(self):
+        c = self._client()
+        assert c.send(self._msg("private"), MessageBuilder().text("你好").build()) is True
+        _, path, payload = c.captured[0]
+        assert path == "/v2/users/U1/messages"
+        assert payload["msg_id"] == "ROBOT1.0_in.y!out"
+
+    def test_reply_to_carries_it(self):
+        c = self._client()
+        c.reply_to(self._msg(), "文字回复")
+        assert c.captured[0][2]["msg_id"] == "ROBOT1.0_in.y!out"
+
+    def test_reply_image_with_no_text_and_a_failed_upload_sends_nothing(self):
+        """图片上传失败又没有文字可退 → 宁可不发，也不发一条空消息。
+
+        （官方对空 content 的文本消息会直接拒绝，发出去只是多一次失败。）
+        """
+        c = self._client()
+        assert c.reply_image(self._msg(), "/nonexistent/nope.png") is False
+        assert c.captured == []
+
+    def test_send_text_is_a_reply_not_a_proactive_push(self):
+        c = self._client()
+        c.send_text(self._msg(), "摘要")
+        assert c.captured[0][2]["msg_id"] == "ROBOT1.0_in.y!out"
+
+    def test_the_proactive_shims_are_gone(self):
+        """`send_group_msg(group_id, ...)` 在官方平台上不可能成功 —— 它没有
+        msg_id。留着它当兼容垫片，只会让所有工具静默失败。"""
+        for dead in ("send_group_msg", "send_private_msg"):
+            assert not hasattr(QQOfficialClient, dead), (
+                f"{dead} 又回来了：官方平台没有主动推送，这条路必定 400(40034105)。"
+                "要发消息请用 send(msg, ...) / RobotServer.send(...)")

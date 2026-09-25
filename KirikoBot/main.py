@@ -531,10 +531,7 @@ def _process_battle_round(robot: RobotServer, battle_key: str, battle: dict, ima
                     builder = MessageBuilder()
                     builder.image(f"{stickerdir}/{chosen}")
                     builder.text(f"\n{comeback}")
-                    if robot.msg_type == "group":
-                        robot.client.send_group_msg(robot.group_id or "", builder.build())
-                    else:
-                        robot.client.send_private_msg(robot.user_id, builder.build())
+                    robot.send(builder.build())
             except Exception:
                 logger.exception("Failed to send counter-sticker in battle")
 

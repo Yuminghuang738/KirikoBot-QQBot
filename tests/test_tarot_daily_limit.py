@@ -75,6 +75,9 @@ class TestTheToolHonoursTheLimit:
     class _Robot:
         msg_type, group_id, user_id, user_name = "group", "g1", "u1", "小明"
 
+        def send(self, message):
+            return self.client.send(None, message)
+
     class _AI:
         def __init__(self):
             self.ai_message = {"tool_calls": [{"id": "c1",
@@ -106,12 +109,8 @@ class TestTheToolHonoursTheLimit:
             def __init__(self):
                 self.sent = []
 
-            def send_group_msg(self, gid, msg):
-                self.sent.append(msg)
-                return True
-
-            def send_private_msg(self, uid, msg):
-                self.sent.append(msg)
+            def send(self, msg, message):
+                self.sent.append(message)
                 return True
 
         robot = self._Robot()
@@ -140,10 +139,7 @@ class TestTheToolHonoursTheLimit:
                                      "card_path": ""})
 
         class LLBot:
-            def send_group_msg(self, *a):
-                return True
-
-            def send_private_msg(self, *a):
+            def send(self, *a):
                 return True
 
         robot = self._Robot()
@@ -161,10 +157,7 @@ class TestTheToolHonoursTheLimit:
         ai = self._AI()
 
         class LLBot:
-            def send_group_msg(self, *a):
-                return True
-
-            def send_private_msg(self, *a):
+            def send(self, *a):
                 return True
 
         robot = self._Robot()

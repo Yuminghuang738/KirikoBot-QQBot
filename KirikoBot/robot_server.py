@@ -66,6 +66,15 @@ class RobotServer:
 
     # ── Sending ──────────────────────────────────────────
 
+    def send(self, message: Any) -> bool:
+        """发送任意段列表（文本/图片/混合）作为**被动回复**。
+
+        工具要自己发消息时用这个，**不要**去碰 `client` 上按 id 发送的方法 ——
+        官方平台没有主动推送，不带原消息 `msg_id` 的发送一律 400
+        （`40034105 主动消息失败, 无权限`）。这里自动把收到的那条消息带上。
+        """
+        return self.client.send(self.incoming, message)
+
     def reply(self, text: str) -> bool:
         """Reply to incoming message. Groups: reply+@user+text. Private: reply+text."""
         return self.client.reply_to(self.incoming, text)

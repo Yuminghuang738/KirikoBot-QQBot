@@ -63,10 +63,7 @@ class Tarot:
         builder.text(f"\n🎴 {display_name}今天抽到的还是这张：{card['card_name']}")
         if card.get("card_text"):
             builder.text(f"\n{card['card_text']}")
-        if robot.msg_type == "group":
-            robot.client.send_group_msg(robot.group_id or "", builder.build())
-        else:
-            robot.client.send_private_msg(robot.user_id, builder.build())
+        robot.send(builder.build())
 
         ai.model_type = Config.DEEPSEEK_MODEL
         ai.thinking_type = "disabled"
@@ -82,10 +79,7 @@ class Tarot:
         ai.ai_request()
         if ai.ai_text:
             reply = MessageBuilder().text(ai.ai_text.strip())
-            if robot.msg_type == "group":
-                robot.client.send_group_msg(robot.group_id or "", reply.build())
-            else:
-                robot.client.send_private_msg(robot.user_id, reply.build())
+            robot.send(reply.build())
 
     def tarot_call(self, robot: Any, ai: Any) -> None:
         tool_calls = ai.ai_message.get("tool_calls")
@@ -129,10 +123,7 @@ class Tarot:
         if card["card_path"]:
             builder.image(card["card_path"])
         builder.text(f"\n🎴 {display_name}的塔罗牌：{card['card_name']}\n{card['card_text']}")
-        if robot.msg_type == "group":
-            robot.client.send_group_msg(robot.group_id or "", builder.build())
-        else:
-            robot.client.send_private_msg(robot.user_id, builder.build())
+        robot.send(builder.build())
 
         # AI interpretation
         ai.model_type = Config.DEEPSEEK_MODEL
@@ -151,10 +142,7 @@ class Tarot:
             if not is_for_self and target_name:
                 reply_builder.text(f"@{target_name} ")
             reply_builder.text(ai.ai_text.strip())
-            if robot.msg_type == "group":
-                robot.client.send_group_msg(robot.group_id or "", reply_builder.build())
-            else:
-                robot.client.send_private_msg(robot.user_id, reply_builder.build())
+            robot.send(reply_builder.build())
 
         # Deposit history for the REQUESTER (not target)
         try:
@@ -384,10 +372,7 @@ class StickerTool:
         # Send image directly, no reply wrapper
         from qq_official import MessageBuilder
         builder = MessageBuilder().image(f"{self.STICKER_DIR}/{chosen}")
-        if robot.msg_type == "group":
-            robot.client.send_group_msg(robot.group_id or "", builder.build())
-        else:
-            robot.client.send_private_msg(robot.user_id, builder.build())
+        robot.send(builder.build())
         _set_tool_meta(ai, tool_calls)
         ai.user_text = f"发送了表情包({category or '随机'}): {chosen}"
 
@@ -757,18 +742,12 @@ class MusicTool:
 
         info_builder = MessageBuilder()
         info_builder.text("\n".join(info_lines))
-        if robot.msg_type == "group":
-            robot.client.send_group_msg(robot.group_id or "", info_builder.build())
-        else:
-            robot.client.send_private_msg(robot.user_id, info_builder.build())
+        robot.send(info_builder.build())
 
         # Send the music share card — this renders as a beautiful playable card in QQ
         music_builder = MessageBuilder()
         music_builder.music(music_type, str(song_id))
-        if robot.msg_type == "group":
-            robot.client.send_group_msg(robot.group_id or "", music_builder.build())
-        else:
-            robot.client.send_private_msg(robot.user_id, music_builder.build())
+        robot.send(music_builder.build())
 
         logger.info("Music shared: %s - %s (id=%s, type=%s)", name, artist, song_id, music_type)
 
@@ -780,10 +759,7 @@ class MusicTool:
             if audio_path:
                 record_builder = MessageBuilder()
                 record_builder.record(audio_path)
-                if robot.msg_type == "group":
-                    robot.client.send_group_msg(robot.group_id or "", record_builder.build())
-                else:
-                    robot.client.send_private_msg(robot.user_id, record_builder.build())
+                robot.send(record_builder.build())
                 logger.info("Audio voice message also sent for %s - %s", name, artist)
         except Exception:
             logger.debug("ai_tools.music_search_call 忽略了异常", exc_info=True)
@@ -880,10 +856,7 @@ class StickerBattleTool:
             "哼！让你见识见识我的厉害！",
         ])
         builder.text(f"\n{challenge} (第1/{BATTLE_DEFAULT_ROUNDS}轮)")
-        if robot.msg_type == "group":
-            self.client.send_group_msg(robot.group_id or "", builder.build())
-        else:
-            self.client.send_private_msg(robot.user_id, builder.build())
+        robot.send(builder.build())
 
         logger.info("Battle started for %s (key=%s), first sticker: %s", robot.user_name, battle_key, chosen)
 
@@ -1221,10 +1194,7 @@ class ExplainSelfTool:
                 builder.reply(robot.incoming.message_id)
             builder.text(body)
             try:
-                if robot.msg_type == "group":
-                    robot.client.send_group_msg(robot.group_id or "", builder.build())
-                else:
-                    robot.client.send_private_msg(robot.user_id, builder.build())
+                robot.send(builder.build())
             except Exception:
                 logger.exception("explain_self send failed")
                 return
@@ -1309,10 +1279,7 @@ class SimilarStickerTool:
         try:
             from qq_official import MessageBuilder
             builder = MessageBuilder().image(path)
-            if robot.msg_type == "group":
-                robot.client.send_group_msg(robot.group_id or "", builder.build())
-            else:
-                robot.client.send_private_msg(robot.user_id, builder.build())
+            robot.send(builder.build())
             logger.info("Similar sticker sent: %s (distance %d)", best_file, best_dist)
             ai.tool_result_text = (
                 f"已经发出表情库里最像的一张（差异值 {best_dist}，越小越像）。"

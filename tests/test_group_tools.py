@@ -158,6 +158,11 @@ class TestExplainSelfRawDump:
             self.client = llbot
             self.incoming = TestExplainSelfRawDump._Incoming()
 
+        def send(self, message):
+            # 和真实 RobotServer 一样：工具只管给段列表，原消息由这里带上
+            # （官方平台没带 msg_id 的发送一律 400）
+            return self.client.send(self.incoming, message)
+
     class _AI:
         def __init__(self):
             self.ai_message = {
@@ -170,12 +175,8 @@ class TestExplainSelfRawDump:
         def __init__(self):
             self.sent = []
 
-        def send_group_msg(self, group_id, message):
-            self.sent.append((group_id, message))
-            return True
-
-        def send_private_msg(self, user_id, message):
-            self.sent.append((user_id, message))
+        def send(self, msg, message):
+            self.sent.append((getattr(msg, "group_id", "g1"), message))
             return True
 
     def _run(self, db, reasoning=RAW, chain="", content="回复内容"):

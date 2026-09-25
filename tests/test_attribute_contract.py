@@ -89,6 +89,7 @@ def _allowed() -> dict[str, set[str]]:
         "IncomingMessage": _class_attrs(qq, "IncomingMessage"),
         "QuoteInfo": _class_attrs(qq, "QuoteInfo"),
         "RobotServer": _class_attrs(rs, "RobotServer"),
+        "QQOfficialClient": _class_attrs(qq, "QQOfficialClient"),
     }
 
 
@@ -153,3 +154,35 @@ def test_incoming_message_has_no_onebot_seq_fields():
     # OneBot 的字段名一个都不该在
     for dead in ("post_type", "raw_message", "message_type", "sub_type", "notice_type"):
         assert dead not in allowed["IncomingMessage"]
+
+
+def test_no_access_to_nonexistent_client_methods():
+    """`client.X` 必须是 QQOfficialClient 上真实存在的方法/属性。
+
+    这条是冲着**线上真实踩过的坑**来的：`client.send_group_msg(group_id, ...)`
+    曾经是 OneBot 兼容垫片，它不带原消息 `msg_id`，官方平台一律拒绝：
+
+        HTTP 400 {"message":"主动消息失败, 无权限","code":40034105}
+
+    结果是**所有自包含工具**（塔罗 / 搜索 / 点歌 / 新闻 / 一言 / 表情包…）
+    全部静默失败：工具执行了、消息被平台退掉，用户看到的是「机器人不回话」。
+    现在那两个垫片已经被删掉，这个检查保证它们不会再偷偷回来。
+    """
+    allowed = _allowed()
+    problems = _scan([(re.compile(r"\bclient\.(\w+)"), "QQOfficialClient")], allowed)
+    assert not problems, (
+        "QQOfficialClient 上没有这些成员：\n"
+        + "\n".join(f"  client.{attr}  ← {loc}" for _, attr, loc in problems)
+    )
+
+
+def test_the_proactive_push_shims_stay_deleted():
+    """把「不能有主动发送」这件事钉在契约层。
+
+    官方平台只能被动回复（发消息必须带 5 分钟内的原消息 id），
+    所以任何 `send_group_msg(group_id, ...)` 形状的 API 都是陷阱。
+    """
+    allowed = _allowed()
+    for dead in ("send_group_msg", "send_private_msg"):
+        assert dead not in allowed["QQOfficialClient"], (
+            f"client.{dead} 又回来了 —— 官方平台没有主动推送，这条路必定 400")
