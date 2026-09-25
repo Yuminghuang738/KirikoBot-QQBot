@@ -642,9 +642,16 @@ class DatabaseManager:
                 "user_id = ? AND group_id = ?", (user_id, group_id),
             )
         else:
+            # 私聊作用域。**必须同时容忍 NULL 和空串**：官方平台的 C2C 事件里
+            # `group_openid` 缺失，`IncomingMessage.group_id` 是 `""`，全项目
+            # 其他地方（user_mood / user_affection / ai_metrics…）也都用
+            # `group_id or ""` 归一化，于是写进去的是 `""`。而这里以前只查
+            # `IS NULL`（OneBot 时代私聊的 group_id 确实是 NULL），两边对不上，
+            # 结果是**私聊记忆完全读不出来** —— 每句话都被当成全新对话，
+            # 而且不报错、不日志，只有真去翻库才会发现。
             rows = self.takeout(
                 "history", "role, content, tool_calls, tool_call_id",
-                "user_id = ? AND group_id IS NULL", (user_id,),
+                "user_id = ? AND (group_id IS NULL OR group_id = '')", (user_id,),
             )
         rows.reverse()
         return rows

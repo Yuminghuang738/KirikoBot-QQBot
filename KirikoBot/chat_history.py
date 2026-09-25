@@ -83,6 +83,9 @@ def save_turn(db: Any, uid: str, gid: str | None, user_msg: str, ai_text: str,
     if not (ai_text and ai_text.strip()) and not handled:
         return
     try:
+        # 统一成 ""：官方平台私聊的 group_id 是空串（不是 None），库里其他地方
+        # 也一律用 `group_id or ""`。写和读必须是同一种表示，否则作用域对不上。
+        gid = gid or ""
         db.deposit_chat_history("user", uid, gid, user_msg, "", "")
         db.deposit_chat_history("assistant", uid, gid, ai_text or "",
                                 tool_chain, "", reasoning)
