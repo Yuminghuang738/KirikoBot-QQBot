@@ -212,6 +212,7 @@ KirikoBot/
 |---|---|
 | `tools/qq_probe.py` | 官方平台连通性探测：拿 token、看网关、抓原始事件、试被动回复 |
 | `tools/migrate_data.py` | 从旧 OneBot 部署迁移参考数据 |
+| `tools/record_v2_release.py` | 迁移后补记 v2.0.0 的版本记录与变更日志（幂等） |
 
 ---
 
@@ -260,12 +261,18 @@ KirikoBot/
 迁移脚本只搬「和具体是谁无关」的参考数据：
 
 ```bash
-# 先看会迁什么，不写任何东西
+# 1) 先看会迁什么，不写任何东西
 python3 tools/migrate_data.py --source /path/to/old/robot.db --dry-run
 
-# 真迁（顺带把旧库里本地缺的贴图文件也复制过来）
+# 2) 真迁（顺带把旧库里本地缺的贴图文件也复制过来）
 python3 tools/migrate_data.py --source /path/to/old/robot.db --copy-stickers
+
+# 3) 记下这次迁移本身的版本（v2.0.0）。必须在第 2 步之后 ——
+#    迁移会清空 app_versions / changelog 再重灌，先记会被覆盖掉
+python3 tools/record_v2_release.py
 ```
+
+两个脚本都是幂等的，重跑不会写重复数据。
 
 | 迁移 | 说明 |
 |---|---|
@@ -273,6 +280,7 @@ python3 tools/migrate_data.py --source /path/to/old/robot.db --copy-stickers
 | `amp_heads` | 77 条吉他箱头资料（爬虫已删，这是唯一来源） |
 | `app_versions` + `changelog` | 版本号与 93 条版本日志正文 |
 | `stickers` | 表情包索引，只迁本地确实有文件的条目 |
+| `feature_requests` | 8 条需求清单。**这是项目自己的待办历史，不是用户数据** —— 昵称是反规范化存在表里的，显示不依赖 openid，所以能迁 |
 
 `ai_calls`（AI 用量历史）默认不迁——它带旧群号，迁过来会在用量页上多出一批显示不出名字的幽灵群。
 确实想留住历史曲线的话加 `--include-usage`。

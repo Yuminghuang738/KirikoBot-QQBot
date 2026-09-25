@@ -17,6 +17,7 @@
 | `app_versions` | 版本号记录 | 面板「版本日志」页的骨架 |
 | `changelog` | 93 条版本日志正文 | 历史记录，删了就没了 |
 | `stickers` | 表情包索引（1404 条） | 贴图本体已经复制到本地，索引必须跟上 |
+| `feature_requests` | 8 条需求清单 | **项目自己的待办历史，不是用户数据**：表里存了反规范化的 `user_name`，显示不依赖 openid；`/api/features` 也不返回 `group_id`，所以旧群号不会露出来 |
 
 `ai_calls`（AI 用量）默认不迁：它带 `group_id`，而旧群号在新部署里显示不出名字，
 会在用量页上多出一批幽灵群。确实想要历史曲线的话加 `--include-usage`。
@@ -57,6 +58,7 @@ REFERENCE_TABLES: list[tuple[str, str]] = [
     ("tarot_content", "塔罗牌义文案"),
     ("amp_heads", "吉他箱头资料库"),
     ("stickers", "表情包索引（只迁本地有文件的那些）"),
+    ("feature_requests", "需求清单（项目自己的待办历史，不是用户数据）"),
 ]
 
 # 明确不迁的表 + 原因。打印给使用者看，免得以为是漏了。
@@ -72,7 +74,6 @@ SKIPPED_TABLES: list[tuple[str, str]] = [
     ("learning_log", "同上"),
     ("tarot_history", "同上（每日一抽的限额记录）"),
     ("tool_usage", "同上"),
-    ("feature_requests", "同上"),
     ("group_subscriptions", "定时推送功能已删除"),
     ("reminders", "提醒功能已删除（依赖主动推送）"),
     ("feature_settings", "键是旧群号，对不上新群"),
