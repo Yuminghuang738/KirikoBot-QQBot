@@ -1006,6 +1006,11 @@ class DatabaseManager:
                     "is_own": False, "target_name": ""}
         return None
 
+    # 正文兜底匹配时最多回看多少条机器人发言。需要扫描而不是直接 SQL 相等，
+    # 是因为要按归一化后的空白比较（见 _scan_recent_bot_texts）；取这个数量
+    # 是为了给扫描封顶，正常使用远达不到。
+    QUOTED_TEXT_SCAN = 200
+
     def _find_quoted_by_text(self, group_id: str | None,
                              needle: str) -> dict[str, Any] | None:
         """按正文反查**机器人自己**说过的话（拿回收件人）。
@@ -1013,24 +1018,47 @@ class DatabaseManager:
         只在 id 查不到时走这里。不查 `group_messages`：那一边的正文是群友发的，
         而这里要回答的问题是「被引的是不是我自己说的、说给谁的」。正文已经由
         事件给出了，不需要再还原一遍。
+
+        比较分两步，因为两边的空白**不一定一样**：`needle` 是归一化过的
+        （`" ".join(text.split())`，把换行和连续空格压成单个空格），而库里存的是
+        发送时的原文。所以先按原文做一次精确匹配（绝大多数消息是单行、没有多余
+        空格，这一步就命中），没命中再取最近的一批在 Python 侧归一化后比较 ——
+        不这么做的话，一条带换行的发言永远匹配不上。
         """
-        sql = ("SELECT target_user_id FROM bot_messages "
-               "WHERE recalled = 0 AND text = ?")
+        base = ("SELECT text, target_user_id FROM bot_messages "
+                "WHERE recalled = 0 AND text = ?")
         params: list[Any] = [needle]
         if group_id is not None:
-            sql += " AND group_id = ?"
+            base += " AND group_id = ?"
             params.append(group_id)
-        sql += " ORDER BY id DESC LIMIT 1"
         try:
-            rows = self.fetch_data(sql, tuple(params))
+            rows = self.fetch_data(base + " ORDER BY id DESC LIMIT 1", tuple(params))
+            if not rows:
+                rows = self._scan_recent_bot_texts(group_id, needle)
         except sqlite3.Error:
             logger.debug("find_quoted text lookup failed", exc_info=True)
             return None
         if not rows:
             return None
-        target_id = str(rows[0][0] or "")
-        return {"text": needle, "user_name": "", "is_own": True,
+        target_id = str(rows[0][1] or "")
+        return {"text": rows[0][0] or needle, "user_name": "", "is_own": True,
                 "target_name": self._resolve_user_name(group_id, target_id)}
+
+    def _scan_recent_bot_texts(self, group_id: str | None,
+                               needle: str) -> list[tuple[Any, ...]]:
+        """Recent bot lines, compared with whitespace normalized on our side."""
+        sql = "SELECT text, target_user_id FROM bot_messages WHERE recalled = 0"
+        params: list[Any] = []
+        if group_id is not None:
+            sql += " AND group_id = ?"
+            params.append(group_id)
+        sql += " ORDER BY id DESC LIMIT ?"
+        params.append(self.QUOTED_TEXT_SCAN)
+        rows = self.fetch_data(sql, tuple(params))
+        for row in rows:
+            if " ".join(str(row[0] or "").split()) == needle:
+                return [row]
+        return []
 
     def fetch_quoted_target(self, group_id: str | None, message_id: Any) -> str:
         """Raw addressee id recorded for one of our own messages (debug/tests)."""

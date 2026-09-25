@@ -360,3 +360,23 @@ class TestEndToEndOfficialQuote:
         assert found is not None
         assert found["is_own"] is True
         assert found["text"] == "记住这句话"
+
+    def test_multiline_quoted_text_still_matches(self, db):
+        """库里的正文是**原样**存的（含换行、连续空格），而 needle 是归一化过的。
+
+        只做 SQL 相等的话，一条带换行的机器人发言永远匹配不上 —— 引用它时
+        就会退化成「引用的是群里某个人说过的话」。
+        """
+        db.record_bot_message("GRP", "ROBOT1.0_nl", "第一行\n第二行   有   空格",
+                              target_user_id="A_OPENID")
+        db.record_group_message("GRP", "A_OPENID", "小明", "嗯")
+        found = db.find_quoted("GRP", "TMP_none", quoted_text="第一行\n第二行   有   空格")
+        assert found is not None
+        assert found["is_own"] is True
+        assert found["target_name"] == "小明"
+
+    def test_the_text_fallback_only_looks_at_our_own_lines(self, db):
+        """群友说过一模一样的话，不能因此被认成「机器人自己说的」。"""
+        db.record_group_message("GRP", "A_OPENID", "小明", "这句话是群友说的")
+        assert db.find_quoted("GRP", "TMP_none",
+                              quoted_text="这句话是群友说的") is None
