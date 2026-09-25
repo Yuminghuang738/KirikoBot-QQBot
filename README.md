@@ -198,7 +198,7 @@ KirikoBot/
 ├── requirements.txt       # Python 依赖
 ├── Dockerfile             # Docker 镜像构建
 ├── stickers/              # 表情包素材（git 只跟踪随源码发布的 756 张）
-├── carside_picture/       # 素材
+├── carside_picture/       # 塔罗牌面图素材（tarot_content.card_path 指向这里）
 ├── static/
 │   ├── css/app.css        # 面板设计系统（日夜主题）
 │   └── js/app.js          # 面板前端逻辑
