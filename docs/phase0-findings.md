@@ -12,6 +12,9 @@
 | ② | **WebSocket 接入可用** | 收到 `READY`，带 `session_id` 与 `shard` |
 | ③ | **发送路径可用** | 被动回复 `HTTP 200`，返回了 message id |
 | ④ | **接入方式确实可以只用 WebSocket** | 无需回调地址、无需公网 HTTPS |
+| ⑤ | **群聊事件可用** | 收到 `GROUP_AT_MESSAGE_CREATE` 与 `GROUP_ADD_ROBOT` |
+| ⑥ | **群内被动回复可用** | 群消息回复同样 `HTTP 200` 并返回 id |
+| ⑦ | **群内能拿到昵称** | 群事件的 `author.username = "ユーミン"`（单聊事件里没有这个字段）|
 
 `READY` 事件里的机器人自身：
 
@@ -88,15 +91,36 @@ ROBOT1.0_LpwIaw7ngPGxMaqVcn7UcUA4ynteUqeAgkgSfRrwtccWWeLEkWaXOSc.WvNfdNgd1wiKZLP
 实测立即回复是成功的（`HTTP 200`）。**超时后的行为待验证** ——
 故意等 6 分钟再回一次即可确认。
 
-## 待验证（下一步要测的）
+## 关键发现四：群聊身份与昵称
 
-| 项 | 为什么重要 |
-|---|---|
-| **群聊事件**（`GROUP_AT_MESSAGE_CREATE`） | 单聊测不出群相关的一切；`author` 在群里可能多带 `member_openid` / `union_user_account` / `username` |
-| **全量模式**（`GROUP_MESSAGE_CREATE`，非 @ 的群消息） | **决定群语境 / 活跃统计 / 聊天回看能不能保留**；文档说需要开「接收所有消息」开关，但是否要审批未知 |
-| **群成员能否拿到昵称** | 拿不到的话面板要自己维护「openid → 显示名」映射 |
-| **被动回复超时（>5 分钟）的实际报错** | 决定回复策略 |
-| **消息长度上限** | 决定要不要切分 |
+群 @ 事件的 `author`：
+
+```json
+{"id":            "466A7D064E5495F91DE04FA987EACBA3",
+ "member_openid": "466A7D064E5495F91DE04FA987EACBA3",
+ "union_openid":  "466A7D064E5495F91DE04FA987EACBA3",
+ "username":      "ユーミン"}
+```
+
+- ✅ **`username` 在群事件里有值** —— 面板可以显示真实昵称，
+  不需要额外做「openid → 名字」映射（单聊事件里没有这个字段）
+- ❌ 但 `member_openid` / `union_openid` / `id` **仍然完全相同**，
+  依旧**没有任何能对应回 QQ 号的东西** —— 「用户数据迁不过来」这条在群里同样成立
+
+`group_openid` 形态：`A968B3FFD260C6D9FF38FA671BC543F5`（32 位大写十六进制）
+
+另外收到 **`GROUP_ADD_ROBOT`** 事件（机器人被拉进群），带
+`group_openid` + `op_member_openid`。这个事件有用：可以在入群时
+自动做初始化（比如给新群写一份默认的功能开关），不用等人去面板点。
+
+## 待验证
+
+| 项 | 为什么重要 | 状态 |
+|---|---|---|
+| **全量模式**（`GROUP_MESSAGE_CREATE`，非 @ 的群消息） | **决定群语境 / 活跃统计 / 聊天回看能不能保留** | ❌ **仍未测到** —— 需要确认后台有没有「接收所有消息」开关，并在开着监听时发一条普通消息 |
+| **被动回复超时（>5 分钟）的实际报错** | 决定回复策略 | 待测 |
+| **消息长度上限** | 决定要不要切分 | 待测 |
+| 群聊事件里 `union_user_account` 是否出现 | 只在单聊确认了它缺席 | 群事件里也没有 |
 
 ## 对计划的影响（待群聊结果后定稿）
 
