@@ -414,10 +414,12 @@ def _background_sticker_categorize(image_url: str) -> None:
     Runs after the end-to-end reply is already sent, so this does not
     block the user-facing response time.
 
-    Stickers are already categorized at collection time
-    (StickerCollector._auto_categorize); this only fills the gap for images
-    that were not collected, so an already-categorized sticker is skipped
-    instead of paying for a second vision call.
+    Only touches stickers that are already in the library: the incoming image
+    is matched against `stickers` by filename, and an already-categorized one
+    is skipped so we don't pay for a second vision call just to re-derive what
+    we know. Images that aren't in the library are ignored — the passive
+    collection path that used to add them is gone (官方平台收不到非 @ 群消息),
+    so the library is static.
     """
     try:
         match = None

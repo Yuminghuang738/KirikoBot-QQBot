@@ -9,8 +9,10 @@ Design notes
 * HTTP Basic is used deliberately: it needs no session store, and the browser
   replays the credentials for same-origin subresources (stickers) and
   ``EventSource`` streams, which a naive cookie login would have to special-case.
-* The OneBot webhook is exempt: it carries its own HMAC signature (see
-  ``main._webhook_signature_ok``) and cannot present dashboard credentials.
+* Only the healthcheck and Flask's static endpoint are exempt. (There used to be
+  a third exemption for the inbound OneBot webhook, which carried its own HMAC
+  signature — that route is gone now: events arrive over an outbound WebSocket
+  connection, so there is no unauthenticated inbound path left.)
 * Basic auth over plain HTTP is only as private as the network. Put the panel
   behind HTTPS (or a reverse proxy that terminates TLS) before exposing it.
 """
@@ -28,10 +30,12 @@ from config import Config
 logger = logging.getLogger(__name__)
 
 # Endpoint names exempt from dashboard auth:
-#   receive  — the OneBot webhook (carries its own HMAC signature)
 #   static   — Flask's static file endpoint
 #   healthz  — container healthcheck; must stay reachable without credentials
-_WEBHOOK_ENDPOINTS = {"receive", "static", "healthz"}
+#
+# 这里**不应该**再加别的入口。入站 webhook 已经没有了（改成出站 WebSocket 网关），
+# 所以没有任何需要豁免的第三方回调端点。
+_EXEMPT_ENDPOINTS = {"static", "healthz"}
 _PASSWORD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".dashboard_password")
 
 
@@ -76,7 +80,7 @@ def init_app(app) -> None:
 
     @app.before_request
     def _require_dashboard_auth():
-        if request.endpoint in _WEBHOOK_ENDPOINTS:
+        if request.endpoint in _EXEMPT_ENDPOINTS:
             return None
 
         supplied = request.authorization
