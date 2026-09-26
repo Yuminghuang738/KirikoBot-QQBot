@@ -4,9 +4,10 @@ The dashboard needs to answer "where do the tokens and the seconds actually
 go" — `tool_usage` only counts tool invocations, with no latency or outcome
 dimension.
 
-Design: a module-level sink set by ``main`` (mirroring ``LLBotClient``'s
-recorder), so ``ai_server`` never imports the database and stays usable from
-scripts. Every entry point is defensive — metrics must never break a reply.
+Design: a module-level sink set by ``main`` (mirroring the outgoing-message
+recorder on the QQ client), so ``ai_server`` never imports the database and
+stays usable from scripts. Every entry point is defensive — metrics must never
+break a reply.
 """
 from __future__ import annotations
 

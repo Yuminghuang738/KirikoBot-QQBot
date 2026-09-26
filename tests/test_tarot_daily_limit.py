@@ -75,6 +75,9 @@ class TestTheToolHonoursTheLimit:
     class _Robot:
         msg_type, group_id, user_id, user_name = "group", "g1", "u1", "小明"
 
+        def send(self, message):
+            return self.client.send(None, message)
+
     class _AI:
         def __init__(self):
             self.ai_message = {"tool_calls": [{"id": "c1",
@@ -96,7 +99,7 @@ class TestTheToolHonoursTheLimit:
         seed_card(db)
         db.deposit_tarot_history("u1", "愚者_正位")
 
-        tool = Tarot(db, None)
+        tool = Tarot(db)
         drawn = []
         monkeypatch.setattr(tool, "_draw_card",
                             lambda: drawn.append(1) or {"card_name": "世界_正位",
@@ -106,24 +109,20 @@ class TestTheToolHonoursTheLimit:
             def __init__(self):
                 self.sent = []
 
-            def send_group_msg(self, gid, msg):
-                self.sent.append(msg)
-                return True
-
-            def send_private_msg(self, uid, msg):
-                self.sent.append(msg)
+            def send(self, msg, message):
+                self.sent.append(message)
                 return True
 
         robot = self._Robot()
-        robot.llbot = LLBot()
+        robot.client = LLBot()
 
         tool.tarot_call(robot, self._AI())
 
         assert not drawn, "must not draw a new card"
-        assert robot.llbot.sent, "the card must still be sent again"
+        assert robot.client.sent, "the card must still be sent again"
         text = "".join(
             seg.get("data", {}).get("text", "")
-            for msg in robot.llbot.sent for seg in msg if seg.get("type") == "text"
+            for msg in robot.client.sent for seg in msg if seg.get("type") == "text"
         )
         assert "愚者_正位" in text
         assert "世界_正位" not in text
@@ -132,7 +131,7 @@ class TestTheToolHonoursTheLimit:
         from ai_tools import Tarot
 
         seed_card(db)
-        tool = Tarot(db, None)
+        tool = Tarot(db)
         resent = []
         monkeypatch.setattr(tool, "_resend_today", lambda *a, **k: resent.append(1))
         monkeypatch.setattr(tool, "_draw_card",
@@ -140,14 +139,11 @@ class TestTheToolHonoursTheLimit:
                                      "card_path": ""})
 
         class LLBot:
-            def send_group_msg(self, *a):
-                return True
-
-            def send_private_msg(self, *a):
+            def send(self, *a):
                 return True
 
         robot = self._Robot()
-        robot.llbot = LLBot()
+        robot.client = LLBot()
         tool.tarot_call(robot, self._AI())
         assert not resent, "nothing drawn today, so no 'already drawn' path"
 
@@ -157,18 +153,15 @@ class TestTheToolHonoursTheLimit:
 
         seed_card(db)
         db.deposit_tarot_history("u1", "愚者_正位")
-        tool = Tarot(db, None)
+        tool = Tarot(db)
         ai = self._AI()
 
         class LLBot:
-            def send_group_msg(self, *a):
-                return True
-
-            def send_private_msg(self, *a):
+            def send(self, *a):
                 return True
 
         robot = self._Robot()
-        robot.llbot = LLBot()
+        robot.client = LLBot()
         tool._resend_today(robot, ai, db.get_today_tarot("u1"), "小明", True)
         assert "今天只能抽一次" in ai.user_text
         assert "抽到什么就是什么" in ai.user_text

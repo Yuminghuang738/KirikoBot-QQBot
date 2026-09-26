@@ -16,15 +16,17 @@ logger = logging.getLogger(__name__)
 # Feature registry — shared by gate logic and the dashboard UI.
 # Order = display order on the settings page.
 FEATURE_DEFS: list[dict[str, str]] = [
-    {"key": "morning_news",    "label": "早间新闻推送", "category": "推送",     "desc": "每天 7:00 推送时政/游戏新闻和每日一言"},
     {"key": "affection",       "label": "好感度系统",   "category": "互动系统", "desc": "记录与 Kiriko 的好感度，影响回复语气"},
     {"key": "profiles",        "label": "用户画像",     "category": "互动系统", "desc": "分析群友发言生成人格画像"},
     {"key": "learning",        "label": "学习系统",     "category": "互动系统", "desc": "记录对话经验并自我改进"},
     {"key": "vision",          "label": "图像识别",     "category": "视觉",     "desc": "理解表情包/图片内容并生成回复"},
     {"key": "sticker_battle",  "label": "斗图模式",     "category": "视觉",     "desc": "表情包对战玩法"},
     {"key": "sticker",         "label": "表情包发送",   "category": "视觉",     "desc": "聊天中发送表情包"},
-    {"key": "sticker_collect", "label": "表情包采集",   "category": "视觉",     "desc": "自动收藏群友发的表情包"},
+    # `sticker_collect`（表情包采集）已删除：被动收集靠监听群里所有消息，
+    # 而官方平台默认收不到非 @ 的群消息。表情库现在是静态的。
     {"key": "music",           "label": "音乐点歌",     "category": "生活娱乐", "desc": "点歌/音乐分享卡片"},
+    # 箱头原来只有「每天定时推一条」，官方平台没有主动推送，所以改成按需工具
+    {"key": "amp_head",        "label": "箱头推荐",     "category": "生活娱乐", "desc": "按需推荐一条吉他箱头资料"},
     {"key": "weather",         "label": "天气查询",     "category": "信息查询", "desc": "查询城市天气"},
     {"key": "tarot",           "label": "塔罗占卜",     "category": "生活娱乐", "desc": "塔罗抽牌和解牌"},
     {"key": "web_search",      "label": "联网搜索",     "category": "信息查询", "desc": "联网搜索网页内容"},
@@ -34,18 +36,12 @@ FEATURE_DEFS: list[dict[str, str]] = [
     {"key": "hitokoto",        "label": "一言",         "category": "生活娱乐", "desc": "随机一言/名言"},
     {"key": "food",            "label": "吃什么",       "category": "生活娱乐", "desc": "随机推荐吃什么"},
     {"key": "dice",            "label": "骰子",         "category": "生活娱乐", "desc": "掷骰子/随机数"},
-    {"key": "reminder",        "label": "提醒",         "category": "群功能",   "desc": "设置/查询/删除提醒"},
-    {"key": "at_member",       "label": "@群友",        "category": "群功能",   "desc": "帮用户@群友"},
     {"key": "balance",         "label": "余额查询",     "category": "群功能",   "desc": "查询 AI 服务余额"},
     {"key": "feature_request", "label": "功能建议",     "category": "群功能",   "desc": "向开发者提交功能建议"},
     {"key": "recall",          "label": "撤回消息",     "category": "群功能",   "desc": "撤回机器人自己刚发出的消息"},
-    {"key": "group_stats",     "label": "发言统计",     "category": "群功能",   "desc": "统计群内当天的发言情况"},
-    {"key": "context_read",    "label": "语境读取",     "category": "群功能",   "desc": "需要时读取群里的近期聊天记录来理解语境"},
     {"key": "feature_list",    "label": "需求清单查询", "category": "群功能",   "desc": "群友可查询提过的功能需求进度"},
     {"key": "explain_self",    "label": "执行回放",     "category": "群功能",   "desc": "调试用：把上一轮的思维链原文/工具调用/回复原文照录发出来，不经 AI 转述"},
-    {"key": "voice",           "label": "语音回复",     "category": "群功能",   "desc": "偶尔直接用语音说话，而不是打字（需要 QQ 的 AI 语音功能）"},
     {"key": "similar_sticker", "label": "相似表情",     "category": "视觉",     "desc": "按用户发的图找库里最像的表情"},
-    {"key": "subscription",    "label": "群推送订阅",   "category": "推送",     "desc": "按设定时间推送早报/游戏/一言/发言榜"},
 ]
 
 FEATURE_KEYS: list[str] = [f["key"] for f in FEATURE_DEFS]
@@ -56,9 +52,6 @@ VALID_SCOPES: tuple[str, ...] = ("group", "user")
 TOOL_FEATURE: dict[str, str] = {
     "check_affection": "affection",
     "affection_leaderboard": "affection",
-    "set_reminder": "reminder",
-    "list_reminders": "reminder",
-    "delete_reminder": "reminder",
     "tarot": "tarot",
     "tarot_history": "tarot",
     "gaming_news": "gaming_news",
@@ -73,16 +66,13 @@ TOOL_FEATURE: dict[str, str] = {
     "hitokoto": "hitokoto",
     "food_picker": "food",
     "dice": "dice",
-    "at_member": "at_member",
     "check_balance": "balance",
     "submit_feature": "feature_request",
     "recall_message": "recall",
-    "group_stats": "group_stats",
-    "read_context": "context_read",
     "feature_list": "feature_list",
     "explain_self": "explain_self",
-    "send_voice": "voice",
     "similar_sticker": "similar_sticker",
+    "amp_head": "amp_head",
 }
 
 

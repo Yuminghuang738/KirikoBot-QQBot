@@ -1,29 +1,30 @@
-"""Quote awareness and ambient group context.
+"""Quote awareness —— 机器人要认出「被引的是不是我自己说过的、说给谁的」。
 
-Two related failures are covered here.
+这条链路上每一环都曾经是断的，而且**断得都不出声**（没有报错，只是永远
+拿不到被引内容），所以这里的测试分两层：零件（`resolve_quote` 的行为）
+和端到端（真实官方事件的形状 → 提示文案）。
 
-**Quote awareness never fired.** LLBot's reply segment is only
-`{"type": "reply", "data": {"id": "75563830"}}` — no text, no sender — but the
-code assumed the quoted content arrived inline, so `_reply_note` returned ""
-for every single quote. Quoting the bot's own reply (the case the feature
-exists for) did nothing at all. The id now resolves against bot_messages /
-group_messages.
+官方平台给引用信息的方式（依据官方文档 group_at_message_create）：
 
-**Ambient context was left to the model.** Reading the room was offered only
-as the `read_context` tool; it was called 12 times against 1000+ for other
-tools, so replies kept answering the wrong thing. A short transcript is now
-attached to every group message by default.
+* 被引正文在 `msg_elements[].content`，作者在 `msg_elements[].author.username`；
+* `message_type == 103` 是**消息级**字段，表示「这条消息是引用消息」；
+* `message_scene.ext` 里 `ref_msg_idx=` 是引用场景的标记
+  （`msg_idx=` 是本条消息自己的索引，**每条都有**）。
+
+事件里**没有**的是「被引那句话当初是说给谁的」—— 那只能拿被引正文/索引回
+我们自己的 `bot_messages` 反查，这也正是「B 引用了机器人说给 A 的话」能被
+识别出来的原因。
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from prompt_builder import (format_group_context, resolve_quote)
+from prompt_builder import resolve_quote
 
 
 @dataclass
 class _Reply:
-    """A reply segment as LLBot actually sends it."""
+    """引用信息的通用桩（同时覆盖官方字段与历史字段）。"""
 
     message_seq: int | None = None
     sender_id: str = ""
@@ -79,16 +80,19 @@ class TestLLBotSendsOnlyAnId:
         note = resolve_quote(_Reply(text="晚上吃啥", sender_name="小明"), is_own=False)
         assert "晚上吃啥" in note and "小明" in note
 
-    def test_inline_content_skips_the_lookup(self):
-        """For someone else's message we already have everything we need.
+    def test_the_lookup_always_runs_because_it_owns_is_own_and_target(self):
+        """有引用就查库 —— 哪怕事件已经给了正文和昵称。
 
-        (For the bot's *own* message we still have to look up who it was said
-        to, so that case always hits the lookup.)
+        这里以前断言的是「别人的消息，信息齐了就别查了」（省一次查询）。
+        那个优化在官方平台上是**有害**的：`is_own` 和「说给谁的」只有我们自己的
+        库知道，跳过查库就永远认不出「被引的是机器人自己说过的话」。
+        实测症状：对方引用了机器人对别人说的话，生成出来的说明是
+        「引用的是 Kiriko 说过的话」—— 把机器人当成了群里的第三个人。
         """
         called = []
         resolve_quote(_Reply(text="晚上吃啥", sender_name="小明"), is_own=False,
                       lookup=lambda mid: called.append(mid))
-        assert not called
+        assert called, "查库是拿到 is_own / target_name 的唯一途径，不能被跳过"
 
     def test_an_own_message_still_looks_up_the_addressee(self):
         called = []
@@ -153,400 +157,6 @@ class TestFindQuoted:
         db.record_bot_message("g1", 777, "被撤回的话")
         db.mark_bot_message_recalled(777)
         assert db.find_quoted("g1", 777)["text"] == "被撤回的话"
-
-
-class TestFormatGroupContext:
-    ROWS = [
-        {"user_name": "小明", "content": "这把琴多少钱", "is_bot": False},
-        {"user_name": "Kiriko", "content": "两千左右", "is_bot": True},
-        {"user_name": "小红", "content": "那这个呢", "is_bot": False},
-    ]
-
-    def test_renders_every_line(self):
-        text = format_group_context(self.ROWS, minutes=15)
-        assert "小明: 这把琴多少钱" in text
-        assert "两千左右" in text
-        assert "那这个呢" in text
-
-    def test_the_bots_own_lines_are_labelled(self):
-        assert "你(Kiriko): 两千左右" in format_group_context(self.ROWS)
-
-    def test_says_how_far_back_it_goes(self):
-        assert "最近 15 分钟" in format_group_context(self.ROWS, minutes=15)
-
-    def test_marks_the_background_as_not_addressed_to_the_bot(self):
-        text = format_group_context(self.ROWS)
-        assert "不是发给你的" in text
-        assert "下面才是需要你回应的消息" in text
-
-    def test_empty_rows_produce_nothing(self):
-        assert format_group_context([]) == ""
-        assert format_group_context(None) == ""
-
-    def test_blank_lines_are_skipped(self):
-        assert format_group_context([{"user_name": "x", "content": "   "}]) == ""
-
-    def test_long_lines_are_trimmed(self):
-        """Every line costs tokens on every message, so keep them short."""
-        text = format_group_context([{"user_name": "x", "content": "字" * 500}])
-        assert "…" in text
-        assert text.count("字") < 500
-
-    def test_newlines_inside_a_message_are_collapsed(self):
-        """One message per line, or the transcript becomes unreadable."""
-        text = format_group_context([{"user_name": "x", "content": "第一行\n第二行"}])
-        assert "第一行 第二行" in text
-
-
-class TestAmbientContextInUserMessage:
-    class _Robot:
-        msg_type, msg = "group", "那这个呢"
-        group_name, user_name = "测试群", "小红"
-
-        class incoming:
-            has_images = False
-
-    def test_context_is_prepended_to_the_message(self):
-        from prompt_builder import build_user_message
-
-        text = build_user_message(self._Robot(), "", "【群里最近 15 分钟还发生了这些】\n  a: b")
-        assert text.index("群里最近") < text.index("小红 说：")
-
-    def test_the_quote_note_comes_after_the_context(self):
-        """The quote explains the current message, so it sits closest to it."""
-        from prompt_builder import build_user_message
-
-        text = build_user_message(self._Robot(), "【引用回复】…", "【群里最近 15 分钟…】")
-        assert text.index("群里最近") < text.index("【引用回复】") < text.index("小红 说：")
-
-    def test_no_context_leaves_the_message_unchanged(self):
-        from prompt_builder import build_user_message
-
-        text = build_user_message(self._Robot(), "", "")
-        assert "群「测试群」中" in text
-        assert "群里最近" not in text
-
-    def test_private_chat_never_gets_group_context(self):
-        from prompt_builder import build_user_message
-
-        class Private(self._Robot):
-            msg_type = "private"
-
-        text = build_user_message(Private(), "", "【群里最近 15 分钟还发生了这些】")
-        assert "群里最近" not in text
-
-
-class TestContextDefaults:
-    def test_ambient_context_is_off_by_default(self):
-        """Reading the room is the model's decision, not an unconditional dump.
-
-        Attaching a transcript to every message was tried and reverted: what
-        was wanted was a looser trigger for read_context, not blanket
-        awareness. Quote resolution is what is always on.
-        """
-        from config import Config
-
-        assert Config.GROUP_CONTEXT_ENABLED is False
-
-    def test_the_knobs_still_exist_for_opting_in(self):
-        from config import Config
-
-        assert Config.GROUP_CONTEXT_MINUTES == 15
-        assert Config.GROUP_CONTEXT_LIMIT == 20
-
-    class _Robot:
-        msg_type, msg = "group", "那这个呢"
-        group_id, user_id = "g1", "u1"
-        user_name, group_name = "小明", "测试群"
-
-        class incoming:
-            has_images = False
-
-    def test_the_trigger_is_narrow(self, monkeypatch):
-        """It was loosened to "when in doubt, look" and then fired on greetings.
-
-        Over-firing does not just cost tokens: the transcript lands in front of
-        the model and the reply answers *it* instead of the actual message.
-        """
-        from config import Config
-        from prompt_builder import build_system_prompt
-
-        monkeypatch.setattr(Config, "GROUP_CONTEXT_ENABLED", False)
-        prompt = build_system_prompt(self._Robot())
-        assert "群聊语境" in prompt
-        assert "read_context" in prompt
-        assert "只有**一种**情况需要调用" in prompt
-
-    def test_it_names_what_not_to_look_up(self, monkeypatch):
-        from config import Config
-        from prompt_builder import build_system_prompt
-
-        monkeypatch.setattr(Config, "GROUP_CONTEXT_ENABLED", False)
-        prompt = build_system_prompt(self._Robot())
-        for dont in ("打招呼", "骂你", "夸你", "收到", "图片"):
-            assert dont in prompt, f"missing do-not-call case: {dont}"
-
-    def test_it_reverses_the_old_doubt_rule(self, monkeypatch):
-        from config import Config
-        from prompt_builder import build_system_prompt
-
-        monkeypatch.setattr(Config, "GROUP_CONTEXT_ENABLED", False)
-        prompt = build_system_prompt(self._Robot())
-        assert "拿不准的时候不要查" in prompt
-        assert "宁可先问一句" in prompt
-
-    def test_it_explains_why_over_looking_hurts(self, monkeypatch):
-        from config import Config
-        from prompt_builder import build_system_prompt
-
-        monkeypatch.setattr(Config, "GROUP_CONTEXT_ENABLED", False)
-        prompt = build_system_prompt(self._Robot())
-        assert "淹掉" in prompt
-        assert "答非所问" in prompt
-
-    def test_opting_in_describes_the_attached_background(self, monkeypatch):
-        from config import Config
-        from prompt_builder import build_system_prompt
-
-        monkeypatch.setattr(Config, "GROUP_CONTEXT_ENABLED", True)
-        prompt = build_system_prompt(self._Robot())
-        assert "已经附了一段最近的群聊背景" in prompt
-
-    def test_private_chat_gets_no_group_context_rule(self, monkeypatch):
-        from config import Config
-        from prompt_builder import build_system_prompt
-
-        monkeypatch.setattr(Config, "GROUP_CONTEXT_ENABLED", False)
-
-        class Private(self._Robot):
-            msg_type = "private"
-            group_id = None
-
-        assert "群聊语境" not in build_system_prompt(Private())
-
-
-class TestReplySegmentParsing:
-    """The reply segment's id and message_seq are different number spaces.
-
-    Live LLBot sends only `{"id": ...}` and that value matches
-    bot_messages.message_id. Taking `message_seq` first would silently resolve
-    to nothing whenever a build supplies both.
-    """
-
-    def test_id_is_preferred_over_message_seq(self):
-        from llbot_client import IncomingMessage
-
-        reply = IncomingMessage._extract_reply([
-            {"type": "reply", "data": {"id": "75563830", "message_seq": 36427}},
-        ])
-        assert reply.message_seq == 75563830
-
-    def test_message_seq_is_used_when_id_is_absent(self):
-        from llbot_client import IncomingMessage
-
-        reply = IncomingMessage._extract_reply([
-            {"type": "reply", "data": {"message_seq": "75563830"}},
-        ])
-        assert reply.message_seq == 75563830
-
-    def test_the_live_payload_shape_parses(self):
-        """Exactly what a real LLBot sends."""
-        from llbot_client import IncomingMessage
-
-        reply = IncomingMessage._extract_reply([
-            {"type": "reply", "data": {"id": "75563830"}},
-        ])
-        assert reply is not None
-        assert reply.message_seq == 75563830
-        assert reply.text == "" and reply.sender_name == ""
-
-    def test_a_non_numeric_id_does_not_raise(self):
-        from llbot_client import IncomingMessage
-
-        reply = IncomingMessage._extract_reply([
-            {"type": "reply", "data": {"id": "abc"}},
-        ])
-        assert reply.message_seq is None
-
-    def test_no_reply_segment(self):
-        from llbot_client import IncomingMessage
-
-        assert IncomingMessage._extract_reply([{"type": "text", "data": {"text": "hi"}}]) is None
-
-
-class TestContextToolDoesNotHijack:
-    """The transcript must be framed as background, not as the thing to answer.
-
-    Live symptom: someone said "唱秋妈妈给我听" and the bot replied to a line
-    from the transcript it had just fetched instead. The tool caused that, not
-    the history.
-    """
-
-    class _Robot:
-        msg_type, group_id, user_id, user_name = "group", "g1", "u1", "小明"
-
-        class incoming:
-            message_id = 1
-
-    class _AI:
-        def __init__(self):
-            self.ai_message = {"tool_calls": [{"id": "c1", "function": {
-                "name": "read_context", "arguments": "{}"}}]}
-            self.tool_result_text = ""
-            self.user_text = ""
-
-    def _rows(self, n=12):
-        return [{"user_name": f"u{i}", "content": f"消息{i}", "timestamp": "2026-09-18 18:0%d" % i,
-                 "is_bot": False} for i in range(n)]
-
-    def _run(self, db, monkeypatch, rows=None):
-        import ai_tools
-
-        tool = ai_tools.ReadContextTool(db, None)
-        monkeypatch.setattr(db, "get_recent_group_context",
-                            lambda *a, **k: self._rows() if rows is None else rows)
-        ai = self._AI()
-        tool.read_context_call(self._Robot(), ai)
-        return ai.tool_result_text
-
-    def test_the_framing_comes_before_the_transcript(self, db, monkeypatch):
-        import ai_tools
-
-        monkeypatch.setattr(ai_tools, "_context_seen", {})
-        text = self._run(db, monkeypatch)
-        assert text.index("不是要你回应的话") < text.index("消息0")
-
-    def test_the_framing_is_repeated_at_the_end(self, db, monkeypatch):
-        import ai_tools
-
-        monkeypatch.setattr(ai_tools, "_context_seen", {})
-        text = self._run(db, monkeypatch)
-        assert "背景到此结束" in text
-        assert text.index("背景到此结束") > text.index("消息0")
-
-    def test_it_says_not_to_answer_the_background(self, db, monkeypatch):
-        import ai_tools
-
-        monkeypatch.setattr(ai_tools, "_context_seen", {})
-        text = self._run(db, monkeypatch)
-        assert "不要回应背景里的任何一条" in text
-
-    def test_it_prefers_asking_over_guessing(self, db, monkeypatch):
-        import ai_tools
-
-        monkeypatch.setattr(ai_tools, "_context_seen", {})
-        assert "就直接问，别猜" in self._run(db, monkeypatch)
-
-    def test_long_lines_are_trimmed(self, db, monkeypatch):
-        import ai_tools
-
-        monkeypatch.setattr(ai_tools, "_context_seen", {})
-        text = self._run(db, monkeypatch, rows=[{
-            "user_name": "x", "content": "字" * 400, "timestamp": "2026-09-18 18:00",
-            "is_bot": False}])
-        assert "…" in text
-        assert text.count("字") < 400
-
-    def test_an_empty_group_says_to_answer_literally(self, db, monkeypatch):
-        import ai_tools
-
-        monkeypatch.setattr(ai_tools, "_context_seen", {})
-        text = self._run(db, monkeypatch, rows=[])
-        assert "按字面回答" in text
-        assert "不要因为查了记录就硬找话说" in text
-
-
-class TestRepeatGuard:
-    """Prompts fail, so a second look within a couple of minutes is shrunk."""
-
-    def test_the_defaults_are_small(self):
-        from ai_tools_list import AiTools
-
-        tools = {t["function"]["name"]: t["function"] for t in AiTools().ai_tools()}
-        props = tools["read_context"]["parameters"]["properties"]
-        assert "默认 15" in props["minutes"]["description"]
-        assert "默认 20" in props["limit"]["description"]
-
-    def test_a_first_look_is_not_throttled(self):
-        import ai_tools
-
-        ai_tools._context_seen.clear()
-        assert ai_tools._just_looked("g1", "u1") is False
-
-    def test_a_second_look_soon_after_is_throttled(self):
-        import ai_tools
-
-        ai_tools._context_seen.clear()
-        assert ai_tools._just_looked("g1", "u1") is False
-        assert ai_tools._just_looked("g1", "u1") is True
-
-    def test_it_is_scoped_per_user_and_group(self):
-        import ai_tools
-
-        ai_tools._context_seen.clear()
-        ai_tools._just_looked("g1", "u1")
-        assert ai_tools._just_looked("g1", "u2") is False
-        assert ai_tools._just_looked("g2", "u1") is False
-
-    def test_the_window_is_a_few_minutes(self):
-        import ai_tools
-
-        assert 1 <= ai_tools.CONTEXT_REPEAT_MINUTES <= 10
-        assert ai_tools.CONTEXT_REPEAT_LIMIT <= 10
-
-    def test_the_repeat_is_disclosed_to_the_model(self, db, monkeypatch):
-        import ai_tools
-
-        ai_tools._context_seen.clear()
-        tool = ai_tools.ReadContextTool(db, None)
-        rows = [{"user_name": "x", "content": f"m{i}", "timestamp": "2026-09-18 18:00",
-                 "is_bot": False} for i in range(30)]
-        monkeypatch.setattr(db, "get_recent_group_context",
-                            lambda *a, **k: rows[:k.get("limit", 20)])
-
-        class Robot:
-            msg_type, group_id, user_id, user_name = "group", "g9", "u9", "小明"
-
-            class incoming:
-                message_id = 1
-
-        class AI:
-            def __init__(self):
-                self.ai_message = {"tool_calls": [{"id": "c", "function": {
-                    "name": "read_context", "arguments": "{}"}}]}
-                self.tool_result_text = ""
-
-        first = AI()
-        tool.read_context_call(Robot(), first)
-        assert "别再查了" not in first.tool_result_text
-
-        second = AI()
-        tool.read_context_call(Robot(), second)
-        assert "别再查了" in second.tool_result_text
-        assert "只给最近几条" in second.tool_result_text
-
-    def test_stale_entries_are_pruned(self):
-        """The dict is bounded by who was active inside the window, not by a
-        hard cap — but anything past the window must actually be dropped."""
-        import time as _time
-        import ai_tools
-
-        ai_tools._context_seen.clear()
-        stale = _time.time() - (ai_tools.CONTEXT_REPEAT_MINUTES * 60 + 60)
-        for i in range(600):
-            ai_tools._context_seen[(f"g{i}", "u")] = stale
-        ai_tools._just_looked("fresh-group", "u")
-        assert ("fresh-group", "u") in ai_tools._context_seen
-        assert len(ai_tools._context_seen) == 1, "stale entries should be pruned"
-
-    def test_recent_entries_are_kept(self):
-        import ai_tools
-
-        ai_tools._context_seen.clear()
-        for i in range(600):
-            ai_tools._just_looked(f"g{i}", "u")
-        # All fresh, so all are legitimately still inside the window.
-        assert len(ai_tools._context_seen) == 600
 
 
 class TestSpeakerChangeAwareness:
@@ -650,56 +260,123 @@ class TestSpeakerChangeAwareness:
             current_user="小明")
         assert "换了个人" in note
 
-    def test_the_client_records_who_a_group_reply_was_at(self, db, monkeypatch):
-        """The `at` segment in the outgoing payload is the addressee."""
-        from llbot_client import LLBotClient
 
-        recorded = []
-        client = LLBotClient("http://x", "t")
-        client.set_recorder(lambda *a: recorded.append(a))
-        client._remember_sent(
-            "send_group_msg",
-            {"group_id": "g1", "message": [
-                {"type": "reply", "data": {"id": "1"}},
-                {"type": "at", "data": {"qq": "2002"}},
-                {"type": "text", "data": {"text": " 给你看看这个"}},
-            ]},
-            type("R", (), {"json": lambda self: {"data": {"message_id": 999}}})(),
+
+class TestEndToEndOfficialQuote:
+    """从**官方事件**一路走到提示文案的端到端回归。
+
+    这条链路之前每一环都是断的，而且断得都不出声：
+
+    1. 事件解析只认 `msg_elements` 里元素自带的 `message_type == 103`，
+       而按官方文档 103 是**消息级**字段 → 引用压根没被解出来；
+    2. 解出来之后，`_reply_note` / `resolve_quote` 读的是 `reply.message_seq`，
+       而 `QuoteInfo` 只有 `message_id` → `AttributeError` 被 `except` 吞掉，
+       「拿 id 去我们自己记录里反查」那一步从来没执行过；
+    3. 就算走到最后，`resolve_quote` 里的
+       `dataclasses.replace(reply, target_name=...)` 也会 `TypeError`，
+       因为 `QuoteInfo` 没有 `target_name` 字段。
+
+    所以这里不测零件，直接测那句话：**用户 B 引用了机器人说给 A 的话，
+    机器人能不能意识到「说话的人换了」。**
+    """
+
+    BOT_MSG_ID = "ROBOT1.0_aaaa.bbbb!cccc"
+
+    def _quote_event(self, quoted_text: str, quoter: str) -> dict:
+        """官方文档里「引用消息」的形状：消息级 message_type=103 +
+        msg_elements 里的正文 + message_scene.ext 里的 ref_msg_idx。"""
+        return {
+            "t": "GROUP_AT_MESSAGE_CREATE",
+            "d": {
+                "id": "ROBOT1.0_new.msg!id",
+                "content": "他说的什么意思",
+                "group_openid": "GRP",
+                "message_type": 103,
+                "author": {"member_openid": "B_OPENID", "username": quoter},
+                "msg_elements": [{"content": quoted_text,
+                                  "author": {"username": "Kiriko"}}],
+                "message_scene": {"ext": ["msg_idx=REFIDX_1==",
+                                          "ref_msg_idx=TMP_1"]},
+            },
+        }
+
+    def test_quoting_what_the_bot_said_to_someone_else_is_recognised(self, db):
+        from qq_official import IncomingMessage
+
+        # 机器人之前对「小明」说过一句话：记进我们自己的库（官方字符串 id）
+        db.record_bot_message("GRP", self.BOT_MSG_ID, "今晚一起打游戏吗",
+                              target_user_id="A_OPENID")
+        # 小明的昵称也要有来源，find_quoted 才能把 A_OPENID 还原成人名
+        db.record_group_message("GRP", "A_OPENID", "小明", "好啊")
+
+        incoming = IncomingMessage.from_event(self._quote_event("今晚一起打游戏吗", "小红"))
+        assert incoming.reply is not None, "第一步就该解出引用"
+        # 引用带的索引是 TMP_ 形式，和我们存的 ROBOT1.0_ 消息 id 不是一套编号 ——
+        # 所以按 id 查不到，真正的还原靠「事件给的被引正文」去匹配自己的记录。
+        assert incoming.reply.message_id == "TMP_1"
+        assert db.find_quoted("GRP", "TMP_1") is None, "id 查不到是预期内的"
+
+        # 这里的 lookup 必须和 main._reply_note 的真实接线一致（带上 quoted_text）
+        note = resolve_quote(
+            incoming.reply,
+            is_own=True,                      # 被引的是机器人自己说过的话
+            lookup=lambda mid: db.find_quoted("GRP", mid,
+                                              quoted_text=incoming.reply.text),
+            current_user="小红",
         )
-        assert recorded == [("g1", 999, "给你看看这个", "2002")]
+        assert "换了个人" in note, f"没识别出说话的人变了：{note!r}"
+        assert "小明" in note
+        assert "小红" in note
 
-    def test_private_sends_are_not_recorded_at_all(self):
-        """Known limitation: recording is group-scoped, so private bot
-        messages are not stored and a quote of one cannot be resolved.
+    def test_quoting_an_unknown_message_does_not_explode(self, db):
+        """引用的是一条我们没记录过的消息：安静地退回普通措辞，不能抛异常。"""
+        from qq_official import IncomingMessage
 
-        That is pre-existing (bot_messages is keyed by group) and out of scope
-        here — this test exists so the limitation is visible rather than
-        looking like an oversight.
+        incoming = IncomingMessage.from_event(self._quote_event("谁也没见过的话", "小红"))
+        note = resolve_quote(incoming.reply, is_own=False,
+                             lookup=lambda mid: db.find_quoted(
+                                 "GRP", mid, quoted_text=incoming.reply.text),
+                             current_user="小红")
+        assert isinstance(note, str)
+
+    def test_short_quoted_text_is_not_used_as_a_key(self, db):
+        """正文兜底要有长度护栏，否则一句「好」会到处撞上机器人的话。"""
+        db.record_bot_message("GRP", "ROBOT1.0_x", "好", target_user_id="A_OPENID")
+        assert db.find_quoted("GRP", "TMP_none", quoted_text="好") is None
+
+    def test_recalled_bot_lines_are_not_used_as_a_key(self, db):
+        """撤回过的发言不该再被当成引用目标。"""
+        db.record_bot_message("GRP", "ROBOT1.0_y", "这条已经被撤回了",
+                              target_user_id="A_OPENID")
+        db.mark_bot_message_recalled("ROBOT1.0_y")
+        assert db.find_quoted("GRP", "TMP_none",
+                              quoted_text="这条已经被撤回了") is None
+
+    def test_official_string_id_round_trips_through_find_quoted(self, db):
+        """官方 id 是 ~120 字符的字符串，曾是 int() 强转的受害者 —— 必须原样存取。"""
+        db.record_bot_message("GRP", self.BOT_MSG_ID, "记住这句话",
+                              target_user_id="A_OPENID")
+        found = db.find_quoted("GRP", self.BOT_MSG_ID)
+        assert found is not None
+        assert found["is_own"] is True
+        assert found["text"] == "记住这句话"
+
+    def test_multiline_quoted_text_still_matches(self, db):
+        """库里的正文是**原样**存的（含换行、连续空格），而 needle 是归一化过的。
+
+        只做 SQL 相等的话，一条带换行的机器人发言永远匹配不上 —— 引用它时
+        就会退化成「引用的是群里某个人说过的话」。
         """
-        from llbot_client import LLBotClient
+        db.record_bot_message("GRP", "ROBOT1.0_nl", "第一行\n第二行   有   空格",
+                              target_user_id="A_OPENID")
+        db.record_group_message("GRP", "A_OPENID", "小明", "嗯")
+        found = db.find_quoted("GRP", "TMP_none", quoted_text="第一行\n第二行   有   空格")
+        assert found is not None
+        assert found["is_own"] is True
+        assert found["target_name"] == "小明"
 
-        recorded = []
-        client = LLBotClient("http://x", "t")
-        client.set_recorder(lambda *a: recorded.append(a))
-        client._remember_sent(
-            "send_private_msg",
-            {"user_id": "3003", "message": [
-                {"type": "text", "data": {"text": "在的"}}]},
-            type("R", (), {"json": lambda self: {"data": {"message_id": 1000}}})(),
-        )
-        assert recorded == []
-
-    def test_a_group_send_without_an_at_has_no_addressee(self):
-        """Stickers and tool output aren't addressed to anyone in particular."""
-        from llbot_client import LLBotClient
-
-        recorded = []
-        client = LLBotClient("http://x", "t")
-        client.set_recorder(lambda *a: recorded.append(a))
-        client._remember_sent(
-            "send_group_msg",
-            {"group_id": "g1", "message": [
-                {"type": "text", "data": {"text": "哈哈哈"}}]},
-            type("R", (), {"json": lambda self: {"data": {"message_id": 1001}}})(),
-        )
-        assert recorded == [("g1", 1001, "哈哈哈", "")]
+    def test_the_text_fallback_only_looks_at_our_own_lines(self, db):
+        """群友说过一模一样的话，不能因此被认成「机器人自己说的」。"""
+        db.record_group_message("GRP", "A_OPENID", "小明", "这句话是群友说的")
+        assert db.find_quoted("GRP", "TMP_none",
+                              quoted_text="这句话是群友说的") is None

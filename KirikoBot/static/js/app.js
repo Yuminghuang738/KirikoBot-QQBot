@@ -18,24 +18,18 @@ const PAGE_META={
   overview:['总览','机器人运行概况'],
   logs:['实时日志','SSE 实时推送的运行日志'],
   chat:['对话记录','机器人与群友的对话历史'],
-  messages:['群消息','群里采集到的原始消息'],
   profiles:['用户画像','AI 分析出的群友特征'],
   affection:['好感度','互动评分与排行榜'],
   learning:['自学习','从反馈中积累的经验'],
-  reminders:['提醒','定时提醒管理'],
   tarot:['塔罗','塔罗抽牌记录'],
   stickers:['表情包','表情包库与整理'],
   amps:['箱头库','每日箱头推荐的资料库'],
   features:['功能清单','群友提出的功能请求'],
   versions:['版本日志','版本与变更记录'],
   groups:['群管理','已接入的群'],
-  activity:['群活跃','单日发言统计与时段分布'],
-  history:['聊天回看','按天回看群聊完整记录'],
   ai:['AI 用量','调用量、延迟、token 与成本'],
-  push:['群推送','按群订阅定时推送'],
   settings:['群设置','按群 / 用户精细开关功能'],
-  llbot:['LLBot 连接','登录状态、运行指标与配置'],
-  webqq:['WebQQ','LLBot 完整 WebUI（内嵌）'],
+  connection:['连接状态','QQ 官方平台网关连接情况'],
 };
 
 // ── Pointer spotlight on cards (single delegated listener) ──
@@ -73,11 +67,10 @@ window.addEventListener('resize',()=>moveNavPill());
 async function loadPage(name){
   const mc=$('mainContent');
   setPageTitle(name);
-  if(name!=='llbot')stopLLBotLogs();
+  if(name!=='connection')stopConnectionPolling();
   switch(name){
     case 'overview': mc.innerHTML=await overviewHTML(); bindLogsIf('overview-logs'); animateCounters(); break;
     case 'logs': mc.innerHTML=logsPageHTML(); bindLogsIf('logs-view'); startLogSSE(); break;
-    case 'reminders': mc.innerHTML=await remindersHTML(); break;
     case 'tarot': mc.innerHTML=await tarotHTML(); break;
     case 'chat': mc.innerHTML=await chatHTML(); break;
     case 'profiles': mc.innerHTML=await profilesHTML(); break;
@@ -85,17 +78,12 @@ async function loadPage(name){
     case 'features': mc.innerHTML=await featuresHTML(); bindFeatures(); break;
     case 'versions': mc.innerHTML=await versionsHTML(); bindVersions(); break;
     case 'stickers': mc.innerHTML=await stickersHTML(); break;
-    case 'amps': mc.innerHTML=await ampsHTML(); bindAmps(); break;
+    case 'amps': mc.innerHTML=ampsHTML(); bindAmps(); break;
     case 'groups': mc.innerHTML=await groupsHTML(); break;
-    case 'activity': mc.innerHTML=await activityHTML(); bindActivity(); break;
-    case 'history': mc.innerHTML=await historyHTML(); bindHistory(); break;
     case 'ai': mc.innerHTML=aiUsageHTML(); bindAiUsage(); break;
-    case 'push': mc.innerHTML=await pushHTML(); bindPush(); break;
     case 'settings': mc.innerHTML=await settingsHTML(); bindSettings(); break;
     case 'affection': mc.innerHTML=await affectionHTML(); bindAffection(); break;
-    case 'messages': mc.innerHTML=await messagesHTML(); break;
-    case 'llbot': mc.innerHTML=await llbotHTML(); bindLLBot(); break;
-    case 'webqq': mc.innerHTML=webqqHTML(); break;
+    case 'connection': mc.innerHTML=connectionHTML(); bindConnection(); break;
   }
   mc.classList.remove('page-anim');void mc.offsetWidth;mc.classList.add('page-anim');
   moveNavPill();
@@ -122,9 +110,7 @@ async function updateStatus(){
     if(tr)tr.innerHTML=
       `<span class="pill ${s.ok?'ok':'err'}"><span class="s-dot" style="background:currentColor"></span>${s.ok?'运行中':'离线'}</span>`+
       `<span class="pill info">${esc(s.model||'?')}</span>`+
-      `<span class="pill">🛠 ${s.tools||'?'}</span>`+
-      `<span class="pill off" id="tbLLBot">🔌 LLBot …</span>`;
-    refreshLLBotPill();
+      `<span class="pill">🛠 ${s.tools||'?'}</span>`;
   }catch(_){}
 }
 updateStatus();
@@ -148,21 +134,19 @@ async function queryBalance(e){
 // ── Overview (bento dashboard) ──
 async function overviewHTML(){
   let s={totals:{group_messages:0,chat_turns:0,tarot_draws:0,user_profiles:0,tarot_cards:0},tools:[]};
-  let r={reminders:[]}, st={ok:true,sticks:0}, sch={};
+  let st={ok:true,sticks:0}, sch={};
   try{s=await fetch('/api/stats').then(r=>r.json())}catch(_){}
-  try{r=await fetch('/api/reminders').then(r=>r.json())}catch(_){}
   try{st=await fetch('/status').then(r=>r.json())}catch(_){}
-  try{sch=await fetch('/api/scheduler').then(r=>r.json())}catch(_){}
+  // /api/scheduler 现在只回 running 和 check_interval；解析失败或返回 null 时按「已停止」处理。
+  try{sch=(await fetch('/api/scheduler').then(r=>r.json()))||{}}catch(_){sch={}}
 
   const t=s.totals;
-  const pending=r.reminders.filter(x=>!x.fired);
   const tiles=[
     ['c1','💬',t.group_messages,'群消息记录'],
     ['c2','🤖',t.chat_turns,'AI 对话轮次'],
     ['c3','🃏',t.tarot_draws,'塔罗抽牌'],
     ['c4','👤',t.user_profiles,'用户画像'],
     ['c5','🎴',t.tarot_cards,'塔罗牌库'],
-    ['c6','⏰',pending.length,'待触发提醒'],
     ['c3','🎨',st.stickers||0,'表情包'],
     ['c2','👥',st.groups||0,'活跃群组'],
   ];
@@ -187,7 +171,6 @@ async function overviewHTML(){
       <div class="h-meta">运行 ${fmtUptime(st.uptime||0)} · 模型 ${esc(st.model||'?')} · 工具 ${st.tools||0} 个 · 调度器 ${st.scheduler?'运行中':'已停止'}</div>
     </div>
     <div class="h-actions">
-      <button class="btn accent" onclick="schedAction()">🌅 手动早安</button>
       <button class="btn" onclick="loadPage('settings')">⚙️ 群设置</button>
     </div>
   </div>
@@ -219,34 +202,13 @@ async function overviewHTML(){
         <span class="ph-right"><span class="tag ${sch.running?'ok':'err'}">${sch.running?'运行中':'已停'}</span></span>
       </div>
       <div class="panel-body"><div class="sched-info">
+        <div class="si-item"><div class="si-label">调度器</div><div class="si-value">${sch.running?'运行中':'已停止'}</div></div>
         <div class="si-item"><div class="si-label">检查间隔</div><div class="si-value">${sch.check_interval??'—'} 秒</div></div>
-        <div class="si-item"><div class="si-label">下次早安</div><div class="si-value">${esc(sch.next_morning||'—')}</div></div>
-        <div class="si-item"><div class="si-label">活跃群数</div><div class="si-value">${(sch.active_groups||[]).length}</div></div>
-        <div class="si-item"><div class="si-label">待触发提醒</div><div class="si-value">${pending.length}</div></div>
       </div></div>
-    </div>
+    </div>`;
 
-    <div class="panel b-4 reveal" style="--i:11">
-      <div class="panel-header"><span class="hicon">⏰</span>最近提醒
-        <span class="ph-right"><button class="btn sm" onclick="loadPage('reminders')">全部 →</button></span>
-      </div>
-      <div class="panel-body tight">`;
-
-  if(pending.length){
-    h+=`<div class="list">`;
-    pending.slice(0,6).forEach(x=>h+=`<div class="item">
-      <div class="iava">⏰</div>
-      <div class="imain"><div class="ititle">${esc(x.content)}</div>
-        <div class="isub">${esc(x.remind_time)} · @${esc(x.user_name||'—')}</div></div>
-    </div>`);
-    h+=`</div>`;
-  } else {
-    h+=`<div class="empty"><span class="em-ico">🌙</span>暂无待触发提醒</div>`;
-  }
-
-  h+=`</div></div>
-
-    <div class="panel b-8 reveal" style="--i:12">
+  h+=`
+    <div class="panel b-8 reveal" style="--i:11">
       <div class="panel-header"><span class="hicon">📡</span>最近日志
         <span class="ph-right"><button class="btn sm" onclick="loadPage('logs')">打开日志页 →</button></span>
       </div>
@@ -259,15 +221,6 @@ async function overviewHTML(){
   return h;
 }
 function refreshOverview(){loadPage('overview')}
-
-// ── Scheduler actions ──
-async function schedAction(){
-  try{
-    const r=await fetch('/api/scheduler/morning',{method:'POST'});
-    const d=await r.json();
-    toast(d.ok?'早安问候已触发！':'触发失败: '+d.error, d.ok?'ok':'err');
-  }catch(_){toast('请求失败','err')}
-}
 
 // ── Logs ──
 function logsPageHTML(){
@@ -352,77 +305,6 @@ function startLogSSE(){
     }
   }
   connect()
-}
-
-// ── Reminders ──
-async function remindersHTML(){
-  let d={reminders:[]};try{d=await fetch('/api/reminders').then(r=>r.json())}catch(_){}
-  const def=new Date(Date.now()+10*60*1000);
-  const pad=n=>String(n).padStart(2,'0');
-  const defTime=`${def.getFullYear()}-${pad(def.getMonth()+1)}-${pad(def.getDate())}T${pad(def.getHours())}:${pad(def.getMinutes())}`;
-  const pending=d.reminders.filter(x=>!x.fired);
-  const daily=d.reminders.filter(x=>x.repeat_daily);
-
-  let h=`<div class="page-head">
-    <div><div class="ph-title">定时 <span class="em">提醒</span></div>
-      <div class="ph-sub">到点由机器人 @ 提醒，可设每日重复</div></div>
-    <div class="ph-right"><button class="btn primary" onclick="loadPage('reminders')">🔄 刷新</button></div>
-  </div>
-  <div class="bento">
-    <div class="tile c1 b-4 reveal" style="--i:0"><div class="tico">⏰</div><div class="tbody"><div class="num">${d.reminders.length}</div><div class="lbl">提醒总数</div></div></div>
-    <div class="tile c4 b-4 reveal" style="--i:1"><div class="tico">⏳</div><div class="tbody"><div class="num">${pending.length}</div><div class="lbl">待触发</div></div></div>
-    <div class="tile c2 b-4 reveal" style="--i:2"><div class="tico">🔁</div><div class="tbody"><div class="num">${daily.length}</div><div class="lbl">每日重复</div></div></div>
-  </div>
-
-  <div class="panel reveal" style="--i:3;margin-top:16px">
-    <div class="panel-header"><span class="hicon">➕</span>新建提醒</div>
-    <div class="add-form">
-      <input type="datetime-local" id="remTime" value="${defTime}" style="flex:0 0 auto;width:210px">
-      <input type="text" id="remContent" placeholder="提醒内容…">
-      <label style="white-space:nowrap;display:flex;align-items:center;gap:5px"><input type="checkbox" id="remDaily"> 每日</label>
-      <button onclick="addReminder()">➕ 添加提醒</button>
-    </div>
-  </div>
-
-  <div class="panel reveal" style="--i:4">
-    <div class="panel-header"><span class="hicon">⏰</span>提醒记录
-      <span class="ph-right"><span class="tag u">${d.reminders.length} 条</span></span>
-    </div>
-    <div class="panel-body tight"><div class="list">`;
-
-  if(!d.reminders.length){
-    h+=`<div class="empty"><span class="em-ico">⏰</span>暂无提醒记录</div>`;
-  } else {
-    d.reminders.forEach(x=>h+=`<div class="item${x.fired?' ':''}" id="rem-${x.id}" style="${x.fired?'opacity:.45':''}">
-      <div class="iava">${x.fired?'✅':'⏳'}</div>
-      <div class="imain">
-        <div class="ititle">${esc(x.content)}</div>
-        <div class="isub" style="font-family:var(--mono)">${esc(x.remind_time)} · @${esc(x.user_name||'—')}</div>
-      </div>
-      <div class="imeta">
-        <span class="tag ${x.fired?'ok':'warn'}">${x.fired?'已触发':'待触发'}</span>
-        ${x.repeat_daily?'<span class="tag t">每日</span>':''}
-      </div>
-      <div class="iact"><button class="btn sm danger" onclick="delReminder(${x.id})" title="删除提醒">🗑️</button></div>
-    </div>`);
-  }
-  return h+`</div></div></div>`;
-}
-async function addReminder(){
-  const timeVal=($('remTime')||{}).value, content=($('remContent')||{}).value?.trim();
-  const daily=($('remDaily')||{}).checked||false;
-  if(!content){toast('请输入提醒内容','err');return}
-  if(!timeVal){toast('请选择提醒时间','err');return}
-  const remind_time=timeVal.replace('T',' ')+':00';
-  try{
-    const r=await fetch('/api/reminders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content,remind_time,repeat_daily:daily})});
-    const d=await r.json();
-    if(d.ok){toast('提醒已创建');loadPage('reminders')}else toast('创建失败: '+(d.error||'未知'),'err')
-  }catch(_){toast('请求失败','err')}
-}
-async function delReminder(id){
-  if(!confirm('确定删除此提醒？'))return;
-  try{const r=await fetch('/api/reminders/'+id,{method:'DELETE'});const d=await r.json();if(d.ok){const el=document.getElementById('rem-'+id);if(el)el.remove();toast('提醒已删除')}else toast('删除失败: '+(d.error||'未知错误'),'err')}catch(_){toast('请求失败','err')}
 }
 
 // ── Tarot ──
@@ -723,7 +605,7 @@ async function versionsHTML(){
   versions.forEach(ver=>totalEntries+=(ver.changelog_count||0));
   let h=`<div class="page-head">
     <div><div class="ph-title">版本 <span class="em">日志</span></div>
-      <div class="ph-sub">版本号、变更记录与群聊推送</div></div>
+      <div class="ph-sub">版本号与变更记录</div></div>
     <div class="ph-right"><button class="btn primary" onclick="loadPage('versions')">🔄 刷新</button></div>
   </div>
   <div class="bento">
@@ -770,7 +652,6 @@ async function versionsHTML(){
       <input id="newVersion" placeholder="版本号 (如 1.1.0)" style="width:130px">
       <input id="newVerDesc" placeholder="版本说明..." style="flex:1;min-width:200px">
       <select id="newVerAuthor"><option value="dashboard">dashboard</option><option value="developer">developer</option></select>
-      <label style="font-size:.72rem;color:var(--muted);white-space:nowrap"><input type="checkbox" id="newVerNotify" checked>群聊通知</label>
       <button onclick="addVersion()">➕ 创建版本</button>
       <button onclick="hideAddVersion()" style="border-color:var(--border);color:var(--muted)">取消</button>
       <button onclick="bumpAndCreate('patch')" class="btn" style="color:var(--green);border-color:rgba(63,185,80,.3);font-size:.65rem">patch++</button>
@@ -815,7 +696,6 @@ async function versionsHTML(){
           <span class="vb-desc">${esc(ver.description||'')}</span>
           <span class="vb-author">${esc(ver.author||'')}</span>
           <button class="btn sm" onclick="event.stopPropagation();showAddChangelog(${ver.id},'${ver.version}')" title="添加变更日志">➕ 日志</button>
-          <button class="btn sm accent" onclick="event.stopPropagation();pushVersion(${ver.id})" title="手动推送版本更新到群聊">📢 推送</button>
           <span id="verExpand-${ver.id}" class="vb-arrow">▶</span>
         </div>
         <div id="verLogs-${ver.id}" style="display:none;border-top:1px solid var(--border);padding:12px 18px">
@@ -859,7 +739,6 @@ async function toggleVersion(versionId){
           <span class="tag" style="color:${typeColor[e.entry_type]||'var(--muted)'};background:color-mix(in srgb, ${typeColor[e.entry_type]||'var(--muted)'} 16%, transparent);flex-shrink:0">${typeEmoji[e.entry_type]||e.entry_type}</span>
           <div class="cl-main"><b>${esc(e.title)}</b>${e.description?`<br><span class="cl-desc">${esc(e.description)}</span>`:''}</div>
           <div class="cl-meta">${esc(e.created_at||'')}<br>${esc(e.author||'')}</div>
-          <button class="btn sm accent" style="flex-shrink:0" onclick="event.stopPropagation();pushChangelog(${e.id})" title="手动推送到群聊">📢</button>
         </div>`).join('');
     }
   }catch(_){logsDiv.innerHTML='<div style="color:var(--red);font-size:.7rem;text-align:center;padding:12px">加载失败</div>'}
@@ -898,13 +777,13 @@ async function addVersion(){
   const version=($('newVersion')||{}).value?.trim();
   const description=($('newVerDesc')||{}).value?.trim();
   const author=($('newVerAuthor')||{}).value||'dashboard';
-  const notify=($('newVerNotify')||{}).checked||false;
   if(!version){toast('请输入版本号','err');return}
   if(!/^\d+\.\d+\.\d+$/.test(version)){toast('版本号格式：X.Y.Z（如 1.0.0）','err');return}
   try{
-    const r=await fetch('/api/versions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version,description,author,notify})});
+    // 官方平台不支持主动推送，创建版本只落库，不再通知群聊。
+    const r=await fetch('/api/versions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version,description,author})});
     const d=await r.json();
-    if(d.ok){toast('版本 '+version+' 已创建！'+(notify?' 已发送群聊通知':''));hideAddVersion();loadPage('versions')}
+    if(d.ok){toast('版本 '+version+' 已创建！');hideAddVersion();loadPage('versions')}
     else toast('创建失败: '+(d.error||'未知'),'err')
   }catch(_){toast('请求失败','err')}
 }
@@ -936,28 +815,6 @@ async function bumpAndCreate(bumpType){
     const inp=$('newVersion');if(inp)inp.value=newVer;
     showAddVersion();
   }catch(_){toast('获取当前版本失败','err')}
-}
-
-async function pushVersion(versionId){
-  if(!confirm('确定要推送此版本更新到所有群聊？'))return;
-  toast('正在推送...');
-  try{
-    const r=await fetch('/api/versions/'+versionId+'/push',{method:'POST'});
-    const d=await r.json();
-    if(d.ok){toast('版本 v'+d.pushed+' 已推送到群聊！')}
-    else toast('推送失败: '+(d.error||'未知'),'err')
-  }catch(_){toast('推送请求失败','err')}
-}
-
-async function pushChangelog(entryId){
-  if(!confirm('确定要推送此变更日志到所有群聊？'))return;
-  toast('正在推送...');
-  try{
-    const r=await fetch('/api/changelog/'+entryId+'/push',{method:'POST'});
-    const d=await r.json();
-    if(d.ok){toast('已推送到群聊: '+d.pushed)}
-    else toast('推送失败: '+(d.error||'未知'),'err')
-  }catch(_){toast('推送请求失败','err')}
 }
 
 // ── Stickers ──
@@ -1298,31 +1155,6 @@ async function confirmDeleteGroup(groupId){
   }
 }
 
-// ── Messages ──
-async function messagesHTML(){
-  let d={records:[]};try{d=await fetch('/api/messages').then(r=>r.json())}catch(_){}
-  let h=`<div class="page-head">
-    <div><div class="ph-title">群 <span class="em">消息</span></div>
-      <div class="ph-sub">群里采集到的原始消息</div></div>
-    <div class="ph-right"><span class="tag u">${d.records.length} 条</span>
-      <button class="btn primary" onclick="loadPage('messages')">🔄 刷新</button></div>
-  </div>
-  <div class="panel reveal" style="--i:0"><div class="panel-body tight"><div class="list">`;
-  if(!d.records.length){
-    h+=`<div class="empty"><span class="em-ico">📨</span>暂无消息</div>`;
-  } else {
-    d.records.forEach(x=>h+=`<div class="item">
-      <div class="iava">${esc((x.user_name||'?').slice(0,1))}</div>
-      <div class="imain">
-        <div class="ititle">${esc(x.user_name||'未知用户')}</div>
-        <div class="isub">${esc(String(x.content||'').slice(0,140))}</div>
-      </div>
-      <div class="imeta"><span class="tag">${esc(x.time||'')}</span></div>
-    </div>`);
-  }
-  return h+`</div></div></div>`;
-}
-
 // ── Affection page ──────────────────────────────────
 
 async function affectionHTML(){
@@ -1461,10 +1293,14 @@ function bindAffection(){
 let SettingsScope={type:'group',id:''};
 let SettingsFeatures=[],SettingsGroups=[],SettingsEnabled={};
 
+// QQ 官方平台下已不存在的能力：即使后端下发了这些开关，前端也不再展示。
+const HIDDEN_FEATURE_KEYS=['reminder','group_stats','context_read','voice','at_member'];
+const isHiddenFeature=key=>HIDDEN_FEATURE_KEYS.includes(key);
+
 async function settingsHTML(){
   try{
     const d=await fetch('/api/settings/groups').then(r=>r.json());
-    SettingsFeatures=d.features||[];
+    SettingsFeatures=(d.features||[]).filter(f=>!isHiddenFeature(f.key));
     SettingsGroups=d.groups||[];
   }catch(_){}
   return `<div class="page-head">
@@ -1508,7 +1344,7 @@ function SettingsRenderScopeBar(){
   const bar=$('scopeBar');if(!bar)return;
   if(SettingsScope.type==='group'){
     const offCount={};
-    SettingsGroups.forEach(g=>offCount[g.group_id]=(g.disabled||[]).length);
+    SettingsGroups.forEach(g=>offCount[g.group_id]=(g.disabled||[]).filter(k=>!isHiddenFeature(k)).length);
     bar.innerHTML=`<div class="fld"><label>选择群聊</label>
       <select id="setGroupSelect">
         <option value="">— 请选择群 —</option>
@@ -1569,7 +1405,7 @@ async function SettingsLoad(){
   SettingsRenderRows();
   const st=$('setScopeStatus');
   if(st){
-    const disabled=Object.keys(SettingsEnabled).filter(k=>SettingsEnabled[k]===false).length;
+    const disabled=Object.keys(SettingsEnabled).filter(k=>SettingsEnabled[k]===false&&!isHiddenFeature(k)).length;
     st.textContent=disabled?`${disabled} 项已关闭`:'全部开启';
   }
 }
@@ -1665,392 +1501,142 @@ function animateCounters(){
 }
 
 // ══════════════════════════════════════════════════════════
-//  LLBot bridge — native panels for the LLBot WebUI
-//  All calls go through /llbot-api/*, where the Flask bridge
-//  injects the WebUI password hash server-side.
+//  Connection — QQ 官方平台接入状态
+//  只读现有的 /status：官方平台走 WebSocket 长连接，没有可配置的地址或端口，
+//  所以这一页不做任何设置项，只把后端实际返回的字段如实展示。
 // ══════════════════════════════════════════════════════════
 
-let llbotLogES=null;
+let connTimer=null;
 
-async function llbotApi(path,opts){
-  const p=String(path||'').replace(/^\/+/,'');
-  const r=await fetch('/llbot-api'+(p?('/'+p):''),opts);
-  let d={};
-  try{d=await r.json()}catch(_){d={success:false,message:'响应解析失败 (HTTP '+r.status+')'}}
-  return d;
-}
-
-function fmtTime(sec){
-  if(!sec)return '—';
-  const d=new Date(sec*1000);
-  const p=n=>String(n).padStart(2,'0');
-  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
-}
-
-function fmtAgo(sec){
-  if(!sec)return '—';
-  const s=Math.floor(Date.now()/1000-sec);
-  if(s<0)return '刚刚';
-  return fmtUptime(s)+'前';
-}
-
-// Small status pill in the topbar; refreshed on a timer.
-async function refreshLLBotPill(){
-  const el=$('tbLLBot');
-  if(!el)return;
-  try{
-    const st=await llbotApi('');
-    if(!st.ok){el.className='pill err';el.textContent='🔌 LLBot 未连接';el.title=st.message||'';return}
-    const on=!!(st.data&&st.data.online);
-    el.className='pill '+(on?'ok':'off');
-    el.textContent=on?('🔌 '+(st.data.nick||'LLBot')+' 在线'):'🔌 LLBot 离线';
-    el.title=st.data&&st.data.uin?('QQ '+st.data.uin):'';
-  }catch(_){el.className='pill err';el.textContent='🔌 LLBot 错误'}
-}
-
-async function llbotHTML(){
-  let bridge={ok:false,message:'检测中…'};
-  try{bridge=await llbotApi('')}catch(_){bridge={ok:false,message:'桥接服务不可用'}}
-
-  let info={},stats={},dev={},quick=[];
-  if(bridge.ok){
-    const [a,b,c,d] = await Promise.all([
-      llbotApi('login-info').catch(()=>({})),
-      llbotApi('dashboard/stats').catch(()=>({})),
-      llbotApi('device-info').catch(()=>({})),
-      llbotApi('quick-login-list').catch(()=>({})),
-    ]);
-    info=a.data||{}; stats=b.data||{}; dev=c.data||{}; quick=(d.data&&d.data.LocalLoginInfoList)||[];
-  }
-
-  const online=!!info.online;
-  const bot=stats.bot||{}, qq=stats.qq||{};
-  const base=(window.__KIRIKO__&&window.__KIRIKO__.llbotPublicUrl)||'';
-
-  let h=`<div class="page-head">
+function connectionHTML(){
+  return `<div class="page-head">
     <div>
-      <div class="ph-title">🔌 LLBot <span class="em">连接</span></div>
-      <div class="ph-sub">登录状态、运行指标与协议配置 · 数据实时取自 LLBot WebUI</div>
+      <div class="ph-title">连接 <span class="em">状态</span></div>
+      <div class="ph-sub">QQ 官方机器人平台（WebSocket 长连接）的接入情况</div>
     </div>
-    <div class="ph-right">
-      <button class="btn" onclick="loadPage('llbot')">🔄 刷新</button>
-      <button class="btn accent" onclick="loadPage('webqq')">🖥️ 完整 WebUI</button>
-    </div>
-  </div>`;
+    <div class="ph-right"><button class="btn primary" onclick="renderConnection()">🔄 刷新</button></div>
+  </div>
 
-  if(!bridge.ok){
-    h+=`<div class="panel"><div class="panel-header">⚠️ 无法读取 LLBot</div>
-      <div class="panel-body">
-        <div class="empty">${esc(bridge.message||'未知错误')}<br><br>
-        请确认 llbot 容器在运行，且 <code>llbot_config/webui_token.txt</code> 已挂载到机器人容器
-        （<code>docker-compose.yml</code> 中的 <code>./llbot_config:/app/llbot_config:ro</code>）。</div>
-      </div></div>`;
-    return h;
-  }
-
-  h+=`<div class="hero reveal" style="--i:0">
-    <div class="av">${online?'🟢':'⚪'}</div>
+  <div class="hero reveal" style="--i:0">
+    <div class="av" id="connAv">⚪</div>
     <div class="h-main">
-      <div class="h-name">${esc(info.nick||'LLBot')}
-        <span class="pill ${online?'ok':'err'}"><span class="s-dot" style="background:currentColor"></span>${online?'在线':'离线'}</span>
+      <div class="h-name">QQ 官方平台
+        <span class="pill off" id="connPill"><span class="s-dot" style="background:currentColor"></span><span id="connState">读取中…</span></span>
       </div>
-      <div class="h-meta">QQ ${esc(info.uin||'—')} · UID ${esc(info.uid||'—')} · ${esc(dev.devType||'')} ${esc(dev.buildVer||'')}</div>
-    </div>
-    <div class="h-actions">
-      <button class="btn" onclick="llbotShowQR()">📱 扫码登录</button>
-      <a class="btn accent" href="${esc(base)}" target="_blank" rel="noopener">↗ 打开官方 WebUI</a>
+      <div class="h-meta" id="connMeta">读取中…</div>
     </div>
   </div>
-  <div id="llbotQrWrap"></div>`;
 
-  h+=`<div class="bento">
-    <div class="tile c1 b-3 reveal" style="--i:1"><div class="tico">👥</div><div class="tbody"><div class="num">${stats.friendCount??'—'}</div><div class="lbl">好友数</div></div></div>
-    <div class="tile c2 b-3 reveal" style="--i:2"><div class="tico">💬</div><div class="tbody"><div class="num">${stats.groupCount??'—'}</div><div class="lbl">群数</div></div></div>
-    <div class="tile c3 b-3 reveal" style="--i:3"><div class="tico">📥</div><div class="tbody"><div class="num">${stats.messageReceived??'—'}</div><div class="lbl">累计接收</div></div></div>
-    <div class="tile c4 b-3 reveal" style="--i:4"><div class="tico">📤</div><div class="tbody"><div class="num">${stats.messageSent??'—'}</div><div class="lbl">累计发送</div></div></div>
-  </div>`;
-
-  h+=`<div class="panel"><div class="panel-header">📈 运行指标</div><div class="panel-body tight"><div class="kv-list">
-    <div class="kv"><span class="k">启动时间</span><span class="v">${fmtTime(stats.startupTime)}（${fmtAgo(stats.startupTime)}）</span></div>
-    <div class="kv"><span class="k">最后消息</span><span class="v">${stats.lastMessageTime?fmtAgo(stats.lastMessageTime):'暂无'}</span></div>
-    <div class="kv"><span class="k">内存占用</span><span class="v">${(bot.memoryPercent??0).toFixed(2)}% · ${fmtBytes(bot.memory)} / ${fmtBytes(bot.totalMemory)}</span></div>
-    <div class="kv"><span class="k">CPU</span><span class="v">${bot.cpu!=null?bot.cpu.toFixed(2)+'%':'—'}</span></div>
-    <div class="kv"><span class="k">QQ 内存</span><span class="v">${(qq.memoryPercent??0).toFixed(2)}% · ${fmtBytes(qq.memory)}</span></div>
-    <div class="kv"><span class="k">设备 / 版本</span><span class="v">${esc(dev.devType||'—')} · ${esc(dev.buildVer||'—')}</span></div>
-  </div></div></div>`;
-
-  if(quick.length){
-    h+=`<div class="panel"><div class="panel-header">⚡ 快速登录账号</div><div class="panel-body tight"><table>
-      <thead><tr><th>QQ</th><th>昵称</th><th>状态</th></tr></thead><tbody>`;
-    quick.forEach(q=>{
-      h+=`<tr><td style="font-family:var(--mono)">${esc(q.uin)}</td><td>${esc(q.nickName||'—')}</td>
-      <td>${q.isQuickLogin?'<span class="tag ok">可快速登录</span>':'<span class="tag warn">需扫码</span>'}
-      ${String(q.uin)===String(info.uin)&&online?'<span class="tag u">当前</span>':''}</td></tr>`;
-    });
-    h+=`</tbody></table></div></div>`;
-  }
-
-  h+=`<div class="panel"><div class="panel-header">📡 LLBot 实时日志
-      <span class="ph-right"><button class="btn" onclick="llbotClearLogs()">🗑 清空</button></span></div>
-    <div class="panel-body"><div class="logs" id="llbot-logs" style="max-height:420px"><div class="empty">正在连接日志流…</div></div></div></div>`;
-
-  return h;
-}
-
-function llbotLogClass(type){
-  const t=String(type||'').toLowerCase();
-  if(t.includes('err'))return 'E';
-  if(t.includes('warn'))return 'W';
-  if(t.includes('debug'))return 'D';
-  return 'I';
-}
-
-function llbotAppendLog(rec){
-  const box=$('llbot-logs');
-  if(!box)return;
-  const ph=box.querySelector('.empty');
-  if(ph)ph.remove();
-  const div=document.createElement('div');
-  div.className='log-entry log-new '+llbotLogClass(rec.type);
-  div.innerHTML='<span class="ts"></span><span class="msg"></span>';
-  div.querySelector('.ts').textContent=rec.dateTimeStr||'';
-  div.querySelector('.msg').textContent=rec.content||'';
-  box.appendChild(div);
-  while(box.children.length>500)box.removeChild(box.firstChild);
-  box.scrollTop=box.scrollHeight;
-}
-
-function llbotClearLogs(){const b=$('llbot-logs');if(b)b.innerHTML='<div class="empty">已清空</div>'}
-
-function startLLBotLogs(){
-  if(llbotLogES)return;
-  try{
-    llbotLogES=new EventSource('/llbot-api/logs/stream');
-    llbotLogES.onmessage=e=>{
-      if(!e.data||e.data==='{}')return;
-      try{llbotAppendLog(JSON.parse(e.data))}catch(_){}
-    };
-    llbotLogES.onerror=()=>{stopLLBotLogs();setTimeout(()=>{if($('llbot-logs'))startLLBotLogs()},4000)};
-  }catch(_){}
-}
-
-function stopLLBotLogs(){
-  if(llbotLogES){try{llbotLogES.close()}catch(_){} llbotLogES=null}
-}
-
-async function llbotShowQR(){
-  const wrap=$('llbotQrWrap');
-  if(!wrap)return;
-  wrap.innerHTML='<div class="panel"><div class="panel-body"><div class="empty">正在获取二维码…</div></div></div>';
-  try{
-    const d=await llbotApi('login-qrcode');
-    const b64=d&&d.success&&d.data&&(d.data.pngBase64Qrcode||d.data.qrcode);
-    if(!b64){wrap.innerHTML='<div class="panel"><div class="panel-body"><div class="empty">获取二维码失败：'+esc((d&&d.message)||'未知错误')+'</div></div></div>';return}
-    const src=b64.startsWith('data:')?b64:('data:image/png;base64,'+b64);
-    wrap.innerHTML=`<div class="panel"><div class="panel-header">📱 扫码登录 <span class="ph-right"><button class="btn" onclick="document.getElementById('llbotQrWrap').innerHTML=''">收起</button></span></div>
-      <div class="qr-box"><img src="${src}" alt="登录二维码"><div style="margin-top:12px;font-size:.76rem;color:var(--muted)">用手机 QQ 扫码登录（二维码会定期失效，可重新获取）</div></div></div>`;
-  }catch(_){
-    wrap.innerHTML='<div class="panel"><div class="panel-body"><div class="empty">获取二维码失败</div></div></div>';
-  }
-}
-
-function bindLLBot(){
-  startLLBotLogs();
-  refreshLLBotPill();
-}
-
-// ── WebQQ embed (LLBot's own WebUI, kept intact) ──
-function webqqHTML(){
-  const base=(window.__KIRIKO__&&window.__KIRIKO__.llbotPublicUrl)||'';
-  return `<div class="page-head">
-    <div>
-      <div class="ph-title">🖥️ <span class="em">WebQQ</span></div>
-      <div class="ph-sub">LLBot 官方 WebUI 完整内嵌 · 收发消息、群成员、通知等全部功能</div>
-    </div>
-    <div class="ph-right">
-      <button class="btn" onclick="var f=document.getElementById('llbotFrame');if(f)f.src=f.src">🔄 重新加载</button>
-      <a class="btn accent" href="${esc(base)}" target="_blank" rel="noopener">↗ 新标签打开</a>
-    </div>
+  <div class="bento">
+    <div class="tile c1 b-3 reveal" style="--i:1"><div class="tico">👥</div><div class="tbody"><div class="num" id="connGroups">—</div><div class="lbl">已接入群</div></div></div>
+    <div class="tile c2 b-3 reveal" style="--i:2"><div class="tico">🛠</div><div class="tbody"><div class="num" id="connTools">—</div><div class="lbl">可用工具</div></div></div>
+    <div class="tile c3 b-3 reveal" style="--i:3"><div class="tico">🎨</div><div class="tbody"><div class="num" id="connStickers">—</div><div class="lbl">表情包</div></div></div>
+    <div class="tile c4 b-3 reveal" style="--i:4"><div class="tico">⏱️</div><div class="tbody"><div class="num" id="connUptime" style="font-size:1rem;line-height:1.5">—</div><div class="lbl">运行时长</div></div></div>
   </div>
-  <div class="embed-shell">
-    <div class="embed-bar">
-      <span>🔗 ${esc(base)}</span>
-      <span class="eb-right"><span class="pill info">首次使用需在此页面登录一次</span></span>
+
+  <div class="panel reveal" style="--i:5;margin-top:16px">
+    <div class="panel-header"><span class="hicon">📡</span>连接详情</div>
+    <div class="panel-body tight"><div class="kv-list">
+      <div class="kv"><span class="k">平台</span><span class="v">QQ 官方机器人平台 · WebSocket 长连接</span></div>
+      <div class="kv"><span class="k">连接状态</span><span class="v" id="connStateText">—</span></div>
+      <div class="kv"><span class="k">机器人 AppID</span><span class="v" id="connAppId">—</span></div>
+      <div class="kv"><span class="k">网关状态</span><span class="v" id="connGateway">—</span></div>
+      <div class="kv"><span class="k">网关会话</span><span class="v" id="connSession">—</span></div>
+      <div class="kv"><span class="k">最近心跳 / 事件</span><span class="v" id="connLastEvent">—</span></div>
+      <div class="kv"><span class="k">模型</span><span class="v" id="connModel">—</span></div>
+      <div class="kv"><span class="k">调度器</span><span class="v" id="connSched">—</span></div>
+    </div></div>
+  </div>
+
+  <div class="panel reveal" style="--i:6">
+    <div class="panel-header"><span class="hicon">ℹ️</span>接入说明</div>
+    <div class="panel-body">
+      <div class="isub">QQ 官方平台通过 WebSocket 长连接接入，无需配置地址或端口；机器人启动后主动连上官方网关即可收发消息。</div>
+      <div class="isub" style="margin-top:6px">本页数据取自后端 <code>/status</code>；接口没有返回的字段显示「—」，不做猜测。</div>
     </div>
-    <iframe id="llbotFrame" src="${esc(base)}" title="LLBot WebUI" referrerpolicy="no-referrer"></iframe>
   </div>`;
 }
 
-// ══════════════════════════════════════════════════════════
-//  Group activity — single-day speech statistics
-// ══════════════════════════════════════════════════════════
-
-function _todayStr(){
-  const d=new Date();
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+function bindConnection(){
+  renderConnection();
+  stopConnectionPolling();
+  connTimer=setInterval(renderConnection,15000);
 }
 
-async function _groupOptions(selected){
-  if(!_groupsCache.length){
-    try{_groupsCache=(await fetch('/api/groups').then(r=>r.json())).groups||[]}catch(_){_groupsCache=[]}
+function stopConnectionPolling(){
+  if(connTimer){clearInterval(connTimer);connTimer=null}
+}
+
+// 取第一个存在且有值的字段；都没有就返回 null，由调用方显示「—」。
+function _pickField(obj,keys){
+  for(const k of keys){
+    const v=obj?obj[k]:undefined;
+    if(v!==undefined&&v!==null&&v!=='')return v;
   }
-  return _groupsCache.map(g=>
-    `<option value="${esc(g.group_id)}"${String(g.group_id)===String(selected)?' selected':''}>${esc(g.group_name||g.group_id)}</option>`
-  ).join('');
+  return null;
 }
 
-async function activityHTML(){
-  const opts=await _groupOptions();
-  return `<div class="page-head">
-    <div><div class="ph-title">群 <span class="em">活跃</span></div>
-      <div class="ph-sub">单日发言统计：谁在说、什么时候最热闹</div></div>
-  </div>
-  <div class="panel reveal" style="--i:0"><div class="panel-body">
-    <div class="toolbar" style="margin:0">
-      <label>群</label><select id="actGroup">${opts}</select>
-      <label>日期</label><input type="date" id="actDate" value="${_todayStr()}">
-      <button class="btn primary" onclick="loadActivity()">查询</button>
-    </div>
-  </div></div>
-  <div id="actBody"><div class="empty"><span class="em-ico">📈</span>选择群和日期后点「查询」</div></div>`;
+// 时间戳可能是秒 / 毫秒，也可能是后端直接给的字符串。0 表示「还没有过」，按缺失处理。
+function _fmtStamp(v){
+  if(v==null||v===''||v===0)return '—';
+  if(typeof v==='number'){
+    const ms=v<1e12?v*1000:v;
+    const d=new Date(ms);
+    if(isNaN(d.getTime()))return '—';
+    const p=n=>String(n).padStart(2,'0');
+    return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  }
+  if(typeof v==='object')return '—';
+  return String(v);
 }
 
-function bindActivity(){ loadActivity(); }
+// 网关字段可能是布尔，也可能是 {connected:…} 对象；后端没给就显示「—」。
+function _gatewayState(gw){
+  if(typeof gw==='boolean')return gw?'已连接':'未连接';
+  if(gw&&typeof gw==='object'&&'connected' in gw)return gw.connected?'已连接':'未连接';
+  return '—';
+}
 
-async function loadActivity(){
-  const box=$('actBody'); if(!box)return;
-  const gid=($('actGroup')||{}).value||'';
-  const date=($('actDate')||{}).value||_todayStr();
-  if(!gid){box.innerHTML='<div class="empty">还没有任何群</div>';return}
-  box.innerHTML='<div class="empty">查询中…</div>';
+async function renderConnection(){
+  let s=null,failed=false;
+  try{ s=await fetch('/status').then(r=>r.json()) }catch(_){ failed=true }
+  if(!s||typeof s!=='object')failed=true;
 
-  let s=null;
-  try{
-    s=(await fetch(`/api/groups/${encodeURIComponent(gid)}/stats?date=${encodeURIComponent(date)}`).then(r=>r.json())).stats;
-  }catch(_){}
-  if(!s){box.innerHTML='<div class="empty">查询失败</div>';return}
-  if(!s.total){
-    box.innerHTML='<div class="empty"><span class="em-ico">🌙</span>'+esc(date)+' 这一天群里没有发言记录</div>';
+  const set=(id,val)=>{const el=$(id);if(el)el.textContent=String(val)};
+  const pill=$('connPill'), av=$('connAv');
+
+  if(failed){
+    if(pill)pill.className='pill off';
+    if(av)av.textContent='⚪';
+    set('connState','状态未知');
     return;
   }
 
-  const maxTop=Math.max(1,...s.top.map(t=>t.count));
-  const maxHour=Math.max(1,...s.hourly);
-  const bars=s.top.map(t=>`<div class="bar"><span class="name">${esc(t.user_name)}</span>
-    <div class="track"><div class="fill" style="width:${Math.max(4,(t.count/maxTop)*100)}%">${t.count}</div></div></div>`).join('');
+  const online=s.ok===true;
+  // 后端没给的字段一律显示「—」，不猜测。
+  const appId=_pickField(s,['app_id','appid','appId','bot_app_id']);
+  // /status 把网关详情放在 gateway 对象里（connected / last_event_at / session_id），
+  // 这里兼容两种形状：网关字段可能在顶层，也可能嵌在 gateway 里。
+  const gwObj=(s.gateway&&typeof s.gateway==='object')?s.gateway:null;
+  const lastEvent=_pickField(s,['last_event_at','last_event','last_heartbeat_at','last_heartbeat'])
+    || (gwObj?_pickField(gwObj,['last_event_at','last_event','last_heartbeat_at','last_heartbeat']):null);
+  const session=gwObj?_pickField(gwObj,['session_id','session']):null;
 
-  const hours=s.hourly.map((c,h)=>`<div class="hc" title="${h}:00 — ${c} 条">
-    <i style="height:${Math.round((c/maxHour)*100)}%"></i><span>${h}</span></div>`).join('');
-
-  box.innerHTML=`
-  <div class="bento" style="margin-top:16px">
-    <div class="tile c1 b-4 reveal" style="--i:0"><div class="tico">💬</div><div class="tbody"><div class="num">${s.total}</div><div class="lbl">总消息</div></div></div>
-    <div class="tile c2 b-4 reveal" style="--i:1"><div class="tico">👥</div><div class="tbody"><div class="num">${s.active_users}</div><div class="lbl">活跃人数</div></div></div>
-    <div class="tile c3 b-4 reveal" style="--i:2"><div class="tico">🖼️</div><div class="tbody"><div class="num">${s.images}</div><div class="lbl">图片 / 表情</div></div></div>
-  </div>
-  <div class="bento" style="margin-top:16px">
-    <div class="panel b-5 reveal" style="--i:3">
-      <div class="panel-header"><span class="hicon">🏆</span>发言排行</div>
-      <div class="panel-body">${bars||'<div class="empty">暂无数据</div>'}</div>
-    </div>
-    <div class="panel b-7 reveal" style="--i:4">
-      <div class="panel-header"><span class="hicon">🕐</span>时段分布</div>
-      <div class="panel-body"><div class="hour-chart">${hours}</div></div>
-    </div>
-  </div>`;
-}
-
-// ══════════════════════════════════════════════════════════
-//  Chat review — paginated group transcript
-// ══════════════════════════════════════════════════════════
-
-async function historyHTML(){
-  const opts=await _groupOptions();
-  return `<div class="page-head">
-    <div><div class="ph-title">聊天 <span class="em">回看</span></div>
-      <div class="ph-sub">按天回看群聊完整记录（含机器人自己说过的话）</div></div>
-  </div>
-  <div class="panel reveal" style="--i:0"><div class="panel-body">
-    <div class="toolbar" style="margin:0">
-      <label>群</label><select id="histGroup">${opts}</select>
-      <label>日期</label><input type="date" id="histDate" value="${_todayStr()}">
-      <input id="histQ" placeholder="搜索关键词…" style="width:150px">
-      <input id="histUser" placeholder="按昵称筛选" style="width:130px">
-      <button class="btn primary" onclick="loadHistory(1)">查询</button>
-      <button class="btn" onclick="resetHistory()">清空筛选</button>
-      <button class="btn accent" id="threadToggle" onclick="toggleThreads()">🧩 按话题分组</button>
-    </div>
-  </div></div>
-  <div id="histBody"><div class="empty"><span class="em-ico">🗂️</span>选择群后点「查询」（留空日期 = 不限日期）</div></div>`;
-}
-
-function bindHistory(){ loadHistory(1); }
-
-function resetHistory(){
-  ['histDate','histQ','histUser'].forEach(id=>{const el=$(id);if(el)el.value=''});
-  loadHistory(1);
-}
-
-async function loadHistory(page){
-  const box=$('histBody'); if(!box)return;
-  const gid=($('histGroup')||{}).value||'';
-  const date=($('histDate')||{}).value||'';
-  const q=($('histQ')||{}).value?.trim()||'';
-  const user=($('histUser')||{}).value?.trim()||'';
-  if(!gid){box.innerHTML='<div class="empty">还没有任何群</div>';return}
-
-  if(_threadMode){ return loadThreads(gid, date, box); }
-
-  box.innerHTML='<div class="empty">读取中…</div>';
-
-  const params=new URLSearchParams({page:String(page||1),size:'100'});
-  if(date)params.set('date',date);
-  if(q)params.set('q',q);
-  if(user)params.set('user',user);
-
-  let d=null;
-  try{d=await fetch(`/api/groups/${encodeURIComponent(gid)}/messages?${params}`).then(r=>r.json())}catch(_){}
-  if(!d||!d.ok){box.innerHTML='<div class="empty">读取失败</div>';return}
-  if(!d.total){
-    box.innerHTML='<div class="empty"><span class="em-ico">🗂️</span>没有符合条件的聊天记录</div>';
-    return;
-  }
-
-  // Resolve quotes within this page so a reply shows what it answers.
-  const seqMap={};
-  d.items.forEach(m=>{if(m.message_seq!=null)seqMap[String(m.message_seq)]=m});
-
-  const rows=d.items.map(m=>{
-    const stamp=String(m.timestamp||'');
-    // Without a date filter the list spans days, so show the date too.
-    const t=esc(date?stamp.slice(11,16):stamp.slice(5,16));
-    let quote='';
-    if(m.reply_to_seq!=null){
-      const src=seqMap[String(m.reply_to_seq)];
-      const label=src
-        ? `${esc(src.user_name)}：${esc(String(src.content||'').slice(0,40))}`
-        : `#${m.reply_to_seq}`;
-      quote=`<div class="m-quote">↩ ${label}</div>`;
-    }
-    return `<div class="msg-row${m.is_bot?' bot':''}">
-      <div class="m-time">${t}</div>
-      <div class="m-who" title="${esc(m.user_name)}">${esc(m.user_name)}</div>
-      <div class="m-text">${quote}${esc(m.content)}</div>
-    </div>`;
-  }).join('');
-
-  box.innerHTML=`
-  <div class="panel reveal" style="--i:1">
-    <div class="panel-header"><span class="hicon">🗂️</span>聊天记录
-      <span class="ph-right"><span class="tag u">共 ${d.total} 条 · 第 ${d.page}/${d.pages} 页</span></span>
-    </div>
-    <div class="panel-body tight"><div class="msg-list">${rows}</div></div>
-    <div class="panel-body" style="border-top:1px solid var(--border);display:flex;gap:8px;align-items:center">
-      <button class="btn" ${d.page<=1?'disabled':''} onclick="loadHistory(${d.page-1})">← 上一页</button>
-      <button class="btn" ${d.page>=d.pages?'disabled':''} onclick="loadHistory(${d.page+1})">下一页 →</button>
-      <span class="ph-sub" style="margin-left:auto">每页 100 条</span>
-    </div>
-  </div>`;
+  if(pill)pill.className='pill '+(online?'ok':'err');
+  if(av)av.textContent=online?'🟢':'⚪';
+  set('connState', online?'在线':'离线');
+  set('connStateText', online?'在线':'离线');
+  set('connMeta', `运行 ${fmtUptime(s.uptime||0)} · 模型 ${s.model||'—'} · 调度器 ${s.scheduler?'运行中':'已停止'}`);
+  set('connGroups', s.groups==null?'—':s.groups);
+  set('connTools', s.tools==null?'—':s.tools);
+  set('connStickers', s.stickers==null?'—':s.stickers);
+  set('connUptime', fmtUptime(s.uptime||0));
+  set('connAppId', appId==null?'—':appId);
+  set('connGateway', _gatewayState(s.gateway));
+  set('connSession', session==null?'—':session);
+  set('connLastEvent', _fmtStamp(lastEvent));
+  set('connModel', s.model||'—');
+  set('connSched', s.scheduler?'运行中':'已停止');
 }
 
 // ══════════════════════════════════════════════════════════
@@ -2158,147 +1744,6 @@ async function loadAiUsage(){
 }
 
 // ══════════════════════════════════════════════════════════
-//  Topic threads (群聊话题聚类)
-// ══════════════════════════════════════════════════════════
-
-let _threadMode=false;
-
-function toggleThreads(){
-  _threadMode=!_threadMode;
-  const btn=$('threadToggle');
-  if(btn)btn.classList.toggle('on',_threadMode);
-  loadHistory(1);
-}
-
-async function loadThreads(gid, date, box){
-  box.innerHTML='<div class="empty">聚类中…</div>';
-  const params=new URLSearchParams();
-  if(date)params.set('date',date);
-
-  let d=null;
-  try{d=await fetch(`/api/groups/${encodeURIComponent(gid)}/threads?${params}`).then(r=>r.json())}catch(_){}
-  if(!d||!d.ok){box.innerHTML='<div class="empty">读取失败</div>';return}
-  const threads=d.threads||[];
-  if(!threads.length){
-    box.innerHTML='<div class="empty"><span class="em-ico">🧩</span>没有可聚类的内容</div>';
-    return;
-  }
-
-  const blocks=threads.map(t=>`<div class="thread reveal" style="--i:${Math.min(t.index,12)}">
-    <div class="thread-head">
-      <span class="tag a">话题 ${t.index}</span>
-      <b>${esc(t.title)}</b>
-      <span class="ph-sub">${esc(String(t.start||'').slice(5,16))} → ${esc(String(t.end||'').slice(11,16))}</span>
-      <span class="ph-right"><span class="tag u">${t.size} 条</span><span class="tag">${t.participants.length} 人</span></span>
-    </div>
-    <div class="thread-body">${t.messages.map(m=>`<div class="msg-row${m.is_bot?' bot':''}">
-      <div class="m-time">${esc(String(m.timestamp||'').slice(11,16))}</div>
-      <div class="m-who" title="${esc(m.user_name)}">${esc(m.user_name)}</div>
-      <div class="m-text">${esc(m.content)}</div>
-    </div>`).join('')}</div>
-  </div>`).join('');
-
-  box.innerHTML=`<div class="panel reveal" style="--i:0">
-    <div class="panel-header"><span class="hicon">🧩</span>按话题分组
-      <span class="ph-right"><span class="tag u">共 ${threads.length} 个话题</span></span></div>
-    <div class="panel-body tight">${blocks}</div>
-  </div>`;
-}
-
-// ══════════════════════════════════════════════════════════
-//  Push subscriptions (群订阅推送)
-// ══════════════════════════════════════════════════════════
-
-const PUSH_TOPICS={
-  morning_news:'☀️ 早间新闻',
-  gaming_news:'🎮 游戏速递',
-  hitokoto:'💬 每日一言',
-  daily_roll_call:'📣 今日发言榜',
-  amp_head:'🎸 今日箱头',
-};
-const PUSH_HINT={
-  morning_news:'时政要闻 + 游戏资讯 + 每日一言',
-  gaming_news:'只推游戏圈热点',
-  hitokoto:'一句随机的语录',
-  daily_roll_call:'@ 出当天发言最多的三个人',
-  amp_head:'每天介绍一款吉他音箱头：年代、音色、市价、选购建议',
-};
-// Topics that were requested at a specific hour start there instead of 07:00.
-const PUSH_DEFAULT_TIME={
-  amp_head:'08:00',
-};
-
-async function pushHTML(){
-  const opts=await _groupOptions();
-  return `<div class="page-head">
-    <div><div class="ph-title">群 <span class="em">推送</span></div>
-      <div class="ph-sub">按群订阅定时推送 · 每天到点自动发，错过超过 2 小时则跳过</div></div>
-  </div>
-  <div class="panel reveal" style="--i:0"><div class="panel-body">
-    <div class="toolbar" style="margin:0">
-      <label>群</label><select id="pushGroup" onchange="loadPush()">${opts}</select>
-      <span class="ph-sub">修改后即时保存</span>
-    </div>
-  </div></div>
-  <div id="pushBody"><div class="empty">选择一个群</div></div>`;
-}
-
-function bindPush(){ loadPush(); }
-
-async function loadPush(){
-  const box=$('pushBody'); if(!box)return;
-  const gid=($('pushGroup')||{}).value||'';
-  if(!gid){box.innerHTML='<div class="empty">还没有任何群</div>';return}
-  box.innerHTML='<div class="empty">读取中…</div>';
-
-  let subs=[];
-  try{subs=(await fetch('/api/subscriptions?group_id='+encodeURIComponent(gid)).then(r=>r.json())).subscriptions||[]}catch(_){}
-  const byTopic={};
-  subs.forEach(s=>{byTopic[s.topic]=s});
-
-  const rows=Object.keys(PUSH_TOPICS).map(t=>{
-    const cur=byTopic[t]||{enabled:false,push_time:PUSH_DEFAULT_TIME[t]||'07:00'};
-    return `<div class="set-row">
-      <div class="sr-info">
-        <div class="sr-label">${esc(PUSH_TOPICS[t])}</div>
-        <div class="sr-desc">${esc(PUSH_HINT[t]||'')}</div>
-      </div>
-      <input type="time" value="${esc(cur.push_time||PUSH_DEFAULT_TIME[t]||'07:00')}" data-push-time="${esc(t)}"
-             style="width:120px" onchange="savePush('${esc(t)}',this.value,null)">
-      <label class="switch"><input type="checkbox" data-push-on="${esc(t)}" ${cur.enabled?'checked':''}
-             onchange="savePush('${esc(t)}',null,this.checked)"><span class="slider"></span></label>
-    </div>`;
-  }).join('');
-
-  box.innerHTML=`<div class="panel reveal" style="--i:1">
-    <div class="panel-header"><span class="hicon">🔔</span>订阅项
-      <span class="ph-right"><span class="tag u">每天 ${subs.filter(s=>s.enabled).length} 项已开</span></span></div>
-    <div class="panel-body tight">${rows}</div>
-    <div class="set-note">推送受「群设置 → 群推送订阅」总开关控制；群内关掉后这里即使打开也不会发。</div>
-  </div>`;
-}
-
-async function savePush(topic, time, enabled){
-  const gid=($('pushGroup')||{}).value||'';
-  if(!gid)return;
-  const body={group_id:gid, topic};
-  if(time!=null) body.time=time;
-  if(enabled!=null) body.enabled=enabled;
-  if(time==null){
-    const el=document.querySelector(`[data-push-time="${topic}"]`);
-    if(el) body.time=el.value;
-  }
-  if(enabled==null){
-    const el=document.querySelector(`[data-push-on="${topic}"]`);
-    if(el) body.enabled=el.checked;
-  }
-  try{
-    const r=await fetch('/api/subscriptions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json());
-    if(r.ok) toast('已保存'); else toast('保存失败: '+(r.error||''),'err');
-  }catch(_){toast('请求失败','err')}
-}
-
-// ══════════════════════════════════════════════════════════
 //  Amp head library (箱头库)
 // ══════════════════════════════════════════════════════════
 
@@ -2306,9 +1751,9 @@ function ampsHTML(){
   // 壳先出来、数据后到：库有几百条，等 fetch 完再渲染会让点击看起来没反应。
   return `<div class="page-head">
     <div><div class="ph-title">箱头 <span class="em">库</span></div>
-      <div class="ph-sub">每日箱头推荐的资料库 · 手写条目与 Wikipedia 抓取的条目都在这里，抓取很慢，触发后要等几分钟</div></div>
+      <div class="ph-sub">吉他音箱头资料库 · 只做浏览与搜索（推送与自动抓取已下线）</div></div>
     <div class="ph-right">
-      <button class="btn accent" id="ampCrawlBtn" onclick="crawlAmps()">🔄 立即抓取</button>
+      <input id="ampSearch" placeholder="搜索品牌 / 型号 / 音色…" style="width:220px" oninput="filterAmps()">
     </div>
   </div>
   <div class="stats" id="ampStats"></div>
@@ -2322,6 +1767,18 @@ function ampsHTML(){
 }
 
 function bindAmps(){ loadAmps(); }
+
+// 纯前端搜索：条目都在页面上，按关键字隐藏不匹配的行即可，不用再请求后端。
+function filterAmps(){
+  const q=(($('ampSearch')||{}).value||'').trim().toLowerCase();
+  let n=0;
+  $$('#ampBody .item').forEach(el=>{
+    const hit=!q||(el.dataset.ampText||'').includes(q);
+    el.style.display=hit?'':'none';
+    if(hit)n++;
+  });
+  const c=$('ampCount'); if(c)c.textContent=n+' 条';
+}
 
 // 来源徽章自己成函数：manual 只有手写标签，wikipedia 有原条目地址时才做成外链。
 function ampSourceTag(h){
@@ -2339,29 +1796,23 @@ async function loadAmps(){
   const box=$('ampBody'); if(!box)return;
   box.innerHTML='<div class="empty">读取中…</div>';
 
-  let d={heads:[],total:0,manual:0,crawled:0,last_crawl:'',crawl_running:false};
+  let d={heads:[],total:0,manual:0,crawled:0};
   // 接口默认只回 200 条，而库会长到几百条：显式要 500（接口上限），免得列表被默默截断。
   try{d=await fetch('/api/amp-heads?limit=500').then(r=>r.json())}catch(_){toast('箱头库读取失败','err')}
   // 请求失败时 fetch 仍可能返回 ok:false，按空库渲染，不要拿 undefined 去 map。
-  if(!d||d.ok===false||!Array.isArray(d.heads))d={heads:[],total:0,manual:0,crawled:0,last_crawl:'',crawl_running:false};
+  if(!d||d.ok===false||!Array.isArray(d.heads))d={heads:[],total:0,manual:0,crawled:0};
   const heads=d.heads;
 
   const stats=$('ampStats');
   if(stats)stats.innerHTML=
     `<div class="tile c1 reveal" style="--i:0"><div class="tico">🎸</div><div class="tbody"><div class="num">${esc(d.total)}</div><div class="lbl">总数</div></div></div>
      <div class="tile c2 reveal" style="--i:1"><div class="tico">✍️</div><div class="tbody"><div class="num">${esc(d.manual)}</div><div class="lbl">手写</div></div></div>
-     <div class="tile c3 reveal" style="--i:2"><div class="tico">🌐</div><div class="tbody"><div class="num">${esc(d.crawled)}</div><div class="lbl">Wikipedia 抓取</div></div></div>
-     <div class="tile c5 reveal" style="--i:3"><div class="tico">🕒</div><div class="tbody"><div class="num" style="font-size:.95rem;line-height:1.5">${esc(d.last_crawl||'还没抓过')}</div><div class="lbl">上次抓取</div></div></div>`;
-
-  // 抓取跑在后台线程里，前端只能靠 crawl_running 这个状态位判断，所以每次刷新都同步按钮。
-  const btn=$('ampCrawlBtn');
-  if(btn){btn.disabled=!!d.crawl_running;btn.textContent=d.crawl_running?'⏳ 抓取中…':'🔄 立即抓取'}
-  const cnt=$('ampCount'); if(cnt)cnt.textContent=heads.length+' 条';
+     <div class="tile c3 reveal" style="--i:2"><div class="tico">🌐</div><div class="tbody"><div class="num">${esc(d.crawled)}</div><div class="lbl">Wikipedia 词条</div></div></div>`;
 
   if(!heads.length){box.innerHTML='<div class="empty"><span class="em-ico">🎸</span>资料库还是空的</div>';return}
 
   const rows=heads.map(h=>{
-    // 抓取时原页面没写的字段就是空字符串，空的直接不占行——留白比一排「—」更容易看出哪条没抓全。
+    // 原条目没写的字段就是空字符串，空的直接不占行——留白比一排「—」更容易看出哪条没填全。
     const metas=[h.year,h.origin,h.kind,h.power,h.tubes]
       .map(v=>String(v==null?'':v).trim()).filter(Boolean).map(esc).join(' · ');
     const tone=String(h.tone||'').trim();
@@ -2370,7 +1821,10 @@ async function loadAmps(){
     // 音色一段常常上百字，限制三行再截断，否则一条就把整屏撑满。
     const toneLine=tone?`<div class="isub" style="display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;white-space:normal">${esc(tone)}</div>`:'';
     const priceLine=price?`<div class="isub">💰 ${esc(price)}</div>`:'';
-    return `<div class="item">
+    // 搜索用的小写全文，挂在 data 属性上，filterAmps() 直接读，避免每次搜索重新拼字符串。
+    const hay=[h.brand,h.model,h.year,h.origin,h.kind,h.power,h.tubes,h.tone,h.price]
+      .map(v=>String(v==null?'':v)).join(' ').toLowerCase();
+    return `<div class="item" data-amp-text="${esc(hay)}">
       <div class="iava">🎸</div>
       <div class="imain">
         <div class="ititle">${esc(h.brand||'')} ${esc(h.model||'')} ${ampSourceTag(h)}</div>
@@ -2381,38 +1835,17 @@ async function loadAmps(){
   }).join('');
 
   box.innerHTML=`<div class="list">${rows}</div>`;
+  filterAmps();
 }
 
 async function deleteAmp(id){
-  if(!confirm('确定删除这条箱头？删除后不再参与每日推荐，且不可恢复。'))return;
+  if(!confirm('确定删除这条箱头？删除后不可恢复。'))return;
   try{
     const d=await fetch('/api/amp-heads/'+encodeURIComponent(id),{method:'DELETE'}).then(r=>r.json());
     if(d.ok){toast('已删除');loadAmps()}else toast('删除失败: '+(d.error||'未知错误'),'err');
   }catch(_){toast('请求失败','err')}
 }
 
-async function crawlAmps(){
-  const btn=$('ampCrawlBtn');
-  // 先禁用再发请求：抓取接口立刻返回，但用户连点两次第二次会撞 409，看着像报错。
-  if(btn){btn.disabled=true;btn.textContent='⏳ 抓取中…'}
-  try{
-    const r=await fetch('/api/amp-heads/crawl',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({limit:8})});
-    const d=await r.json();
-    if(r.status===409||!d.ok){
-      toast(d.error||'触发失败','err');
-      loadAmps(); // 409 说明后台本来就在跑，按真实状态把按钮同步回去。
-      return;
-    }
-    toast(`已在后台抓取，最多新增 ${d.limit||8} 条，稍后自动刷新`);
-    // 抓取没有进度推送，只能隔一会儿回来看看；20 秒足够看到 running 置位了。
-    setTimeout(loadAmps,20000);
-  }catch(_){
-    toast('请求失败','err');
-    if(btn){btn.disabled=false;btn.textContent='🔄 立即抓取'}
-  }
-}
-
 // ── Init ──
 startLogSSE();
 loadPage('overview');
-setInterval(refreshLLBotPill,30000);

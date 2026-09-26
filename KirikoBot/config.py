@@ -9,8 +9,15 @@ load_dotenv()
 
 
 class Config:
+    # ── QQ 官方机器人平台 ─────────────────────────────
+    # 取代原来的 ONEBOT_API / ONEBOT_TOKEN。凭据在开放平台后台拿。
+    QQ_APP_ID: Final[str | None] = os.getenv("QQ_APP_ID")
+    QQ_APP_SECRET: Final[str | None] = os.getenv("QQ_APP_SECRET")
+    # 官方只给 openid，**拿不到真实 QQ 号**（实测 id/member_openid/
+    # union_openid 恒等，且没有 union_user_account）。ROBOT_QQ 因此只剩
+    # 「排除机器人自己」这一个用途，而官方事件里本来就有 author.bot，
+    # 所以它变成可选项。
     ROBOT_QQ: Final[str | None] = os.getenv("ROBOT_QQ")
-    ONEBOT_API: Final[str | None] = os.getenv("ONEBOT_API")
     # QQ accounts to exclude from profiling, affection, and data collection
     # (the bot itself + other known bots like QQ's built-in 小冰)
     BOT_QQ_LIST: Final[set[str]] = {
@@ -19,13 +26,8 @@ class Config:
             os.getenv("EXTRA_BOT_QQ", "2854196306"),  # QQ 小冰
         ] if qq
     }
-    ONEBOT_TOKEN: Final[str | None] = os.getenv("ONEBOT_TOKEN")
-    # Shared secret LLBot signs its http-post events with. LLBot (OB11HttpPost)
-    # sends `x-signature: sha1=<HMAC-SHA1(raw body)>` keyed by the token set on
-    # its http-post connection — NOT an Authorization header. Defaults to
-    # ONEBOT_TOKEN so a correctly configured deployment is protected with no
-    # extra setting; set WEBHOOK_TOKEN to use a distinct secret.
-    WEBHOOK_TOKEN: Final[str | None] = os.getenv("WEBHOOK_TOKEN") or os.getenv("ONEBOT_TOKEN")
+    # ONEBOT_API / ONEBOT_TOKEN / WEBHOOK_TOKEN 已删除：入站 webhook 被
+    # WebSocket 网关取代（webhook_auth.py 也没了），没有 HTTP 上报需要鉴权。
     # ── Dashboard access ──────────────────────────────
     # The panel can delete data and drive the QQ account, so it is protected by
     # HTTP Basic auth. Leave DASHBOARD_PASSWORD empty and one is generated on
@@ -81,30 +83,6 @@ class Config:
         os.path.dirname(os.path.abspath(__file__)), "backups"
     )
 
-    # ── LLBot WebUI bridge ────────────────────────────
-    # The LLBot WebUI (React SPA) listens on :3080 and guards every /api/*
-    # call with `x-webui-token: sha256(password)`. We proxy it same-origin so
-    # the dashboard can show LLBot status/login/logs without a second login.
-    # LLBOT_WEBUI_URL is how *this* process reaches it (Docker service name).
-    LLBOT_WEBUI_URL: Final[str] = os.getenv("LLBOT_WEBUI_URL") or "http://llbot:3080"
-    # How the *browser* reaches it, for the embedded WebQQ iframe. Empty means
-    # "derive from the request host with port 3080".
-    LLBOT_WEBUI_PUBLIC_URL: Final[str] = os.getenv("LLBOT_WEBUI_PUBLIC_URL") or ""
-    # Explicit plaintext password; when unset we read the token file below.
-    LLBOT_WEBUI_TOKEN: Final[str | None] = os.getenv("LLBOT_WEBUI_TOKEN")
-    # Candidate locations of llbot_config/webui_token.txt (Docker mount first,
-    # then paths relative to this file for running straight from the repo).
-    LLBOT_TOKEN_PATHS: Final[tuple[str, ...]] = tuple(
-        p for p in [
-            os.getenv("LLBOT_TOKEN_FILE"),
-            "/app/llbot_config/webui_token.txt",
-            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                         "llbot_config", "webui_token.txt"),
-            os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         "llbot_config", "webui_token.txt"),
-        ] if p
-    )
-
     # ── Vision (optional, for image description) ──────
     # Uses DeepSeek's official vision model via the same API endpoint and
     # token as the chat model (DEEPSEEK_API / DEEPSEEK_TOKEN).
@@ -114,25 +92,6 @@ class Config:
     VISION_ENABLED: Final[bool] = os.getenv("VISION_ENABLED", "1") == "1"
     VISION_MODEL: Final[str] = os.getenv("VISION_MODEL") or DEEPSEEK_MODEL
 
-    # ── Ambient group context (OFF by default) ────────
-    # Reading the room is meant to be a *decision*: the model calls
-    # `read_context` when it judges that it needs to. Attaching a transcript
-    # to every message instead was tried and reverted — it made the bot's
-    # awareness unconditional and blanketed, when what was actually wanted was
-    # a looser trigger for the tool.
-    #
-    # What IS always on is quote awareness: if a message quotes something, the
-    # quoted content is always resolved and attached (see _reply_note). That is
-    # a fact about the current message, not a judgement call.
-    #
-    # Set GROUP_CONTEXT_ENABLED=1 to attach the transcript to every group
-    # message as well. When on, it goes in the user message rather than the
-    # system prompt so the large stable system prompt keeps hitting
-    # DeepSeek's prefix cache.
-    GROUP_CONTEXT_ENABLED: Final[bool] = os.getenv("GROUP_CONTEXT_ENABLED", "0") == "1"
-    GROUP_CONTEXT_MINUTES: Final[int] = int(os.getenv("GROUP_CONTEXT_MINUTES") or 15)
-    GROUP_CONTEXT_LIMIT: Final[int] = int(os.getenv("GROUP_CONTEXT_LIMIT") or 20)
-
     # How far back to count "how many times has this user pestered me" — the
     # signal behind the persona's escalating temper. Larger = slower to anger.
     PATIENCE_WINDOW_MINUTES: Final[int] = int(os.getenv("PATIENCE_WINDOW_MINUTES") or 10)
@@ -141,21 +100,11 @@ class Config:
     # either. The mood decays to normal over this many minutes.
     MOOD_COOLDOWN_MINUTES: Final[int] = int(os.getenv("MOOD_COOLDOWN_MINUTES") or 30)
 
-    # ── AI voice (QQ's own synthesis, via LLOneBot) ────
-    # The model decides on its own whether to speak instead of type. Voice is
-    # group-only (the LLOneBot endpoint is send_group_ai_record) and needs QQ's
-    # AI voice feature to be available, so every failure falls back to text.
-    VOICE_ENABLED: Final[bool] = os.getenv("VOICE_ENABLED", "1") == "1"
-    # Kiriko is an 18-year-old tsundere girl, so this is the default timbre.
-    # Verified present via get_ai_characters: lucy-voice-f38 = 傲娇少女.
-    VOICE_DEFAULT_CHARACTER: Final[str] = os.getenv("VOICE_DEFAULT_CHARACTER") or "lucy-voice-f38"
-
     @classmethod
     def validate(cls) -> None:
         required: dict[str, str | None] = {
-            "ROBOT_QQ": cls.ROBOT_QQ,
-            "ONEBOT_API": cls.ONEBOT_API,
-            "ONEBOT_TOKEN": cls.ONEBOT_TOKEN,
+            "QQ_APP_ID": cls.QQ_APP_ID,
+            "QQ_APP_SECRET": cls.QQ_APP_SECRET,
             "DEEPSEEK_TOKEN": cls.DEEPSEEK_TOKEN,
         }
         missing = [k for k, v in required.items() if not v]

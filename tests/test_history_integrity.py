@@ -189,3 +189,50 @@ class TestTheReportedScenario:
         save_turn(db, "u1", "g1", "第二个问题", "第二个回答")
         history = load_history(db, "u1", "g1")
         assert [h["content"] for h in history] == ["第二个问题", "第二个回答"]
+
+
+class TestScopeRepresentation:
+    """私聊作用域必须只有一种表示，写和读要对得上。
+
+    这个 bug 是迁移到官方平台时暴露的：OneBot 的私聊 `group_id` 是 `None`，
+    而官方平台 C2C 事件里没有 `group_openid`，`IncomingMessage.group_id` 是
+    **空字符串**。`takeout_chat_history` 当时只查 `group_id IS NULL`，于是
+    「写 `""`、读 `NULL`」永远不相交 —— **私聊记忆完全读不出来**，每句话都被
+    当成全新对话。而且它不报错、不打日志，只有去翻库才会发现。
+    """
+
+    def test_private_turn_saved_with_empty_string_is_read_back(self, db):
+        save_turn(db, "u1", "", "第一句", "收到")
+        save_turn(db, "u1", "", "第二句", "好")
+        history = load_history(db, "u1", "")
+        assert [h["content"] for h in history if h["role"] == "user"] == ["第一句", "第二句"]
+
+    def test_legacy_null_rows_are_still_found(self, db):
+        """老库里私聊写的是 NULL，不能因为这次改动把它们变成孤儿。"""
+        db.deposit_chat_history("user", "u1", None, "老数据", "", "")
+        db.deposit_chat_history("assistant", "u1", None, "老回复", "", "")
+        history = load_history(db, "u1", "")
+        assert [h["content"] for h in history] == ["老数据", "老回复"]
+
+    def test_the_two_representations_are_the_same_scope(self, db):
+        """同一个人，一行 NULL 一行 ''，应该被当成同一段对话。"""
+        db.deposit_chat_history("user", "u1", None, "老的", "", "")
+        db.deposit_chat_history("assistant", "u1", None, "老的回", "", "")
+        save_turn(db, "u1", "", "新的", "新的回")
+        contents = [h["content"] for h in load_history(db, "u1", "")]
+        assert contents == ["老的", "老的回", "新的", "新的回"]
+
+    def test_group_scope_is_not_polluted_by_private_rows(self, db):
+        save_turn(db, "u1", "", "私聊说的", "私聊回")
+        save_turn(db, "u1", "GROUP_A", "群里说的", "群里回")
+        private = [h["content"] for h in load_history(db, "u1", "")]
+        group = [h["content"] for h in load_history(db, "u1", "GROUP_A")]
+        assert private == ["私聊说的", "私聊回"]
+        assert group == ["群里说的", "群里回"]
+
+    def test_save_turn_normalizes_none_to_empty_string(self, db):
+        """写的时候归一化：库里只该有一种私聊表示。"""
+        save_turn(db, "u1", None, "你好", "你也好")
+        rows = db.fetch_data(
+            "SELECT DISTINCT quote(group_id) FROM history WHERE user_id = ?", ("u1",))
+        assert rows == [("''",)]

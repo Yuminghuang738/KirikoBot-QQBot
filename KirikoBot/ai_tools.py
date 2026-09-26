@@ -4,16 +4,11 @@ import json
 import logging
 import os
 import random
-import threading
-import time
 from typing import Any
 
 from config import Config
 
 logger = logging.getLogger(__name__)
-
-# One long message must not crowd out the rest of the transcript.
-_CONTEXT_LINE_LIMIT = 100
 
 
 # ── Helper ──────────────────────────────────────────────
@@ -29,9 +24,8 @@ def _set_tool_meta(ai_server: Any, tool_calls: Any, extra: str = "") -> None:
 # ══════════════════════════════════════════════════════════
 
 class Tarot:
-    def __init__(self, database_manager: Any, msg_package: Any) -> None:
+    def __init__(self, database_manager: Any) -> None:
         self.database_manager = database_manager
-        self.msg_package = msg_package
 
     def _draw_card(self) -> dict[str, str]:
         try:
@@ -59,7 +53,7 @@ class Tarot:
     def _resend_today(self, robot: Any, ai: Any, card: dict[str, Any],
                       display_name: str, is_for_self: bool) -> None:
         """Tell them they already drew today, and show that same card again."""
-        from llbot_client import MessageBuilder
+        from qq_official import MessageBuilder
 
         builder = MessageBuilder()
         if not is_for_self:
@@ -69,10 +63,7 @@ class Tarot:
         builder.text(f"\n🎴 {display_name}今天抽到的还是这张：{card['card_name']}")
         if card.get("card_text"):
             builder.text(f"\n{card['card_text']}")
-        if robot.msg_type == "group":
-            robot.llbot.send_group_msg(robot.group_id or "", builder.build())
-        else:
-            robot.llbot.send_private_msg(robot.user_id, builder.build())
+        robot.send(builder.build())
 
         ai.model_type = Config.DEEPSEEK_MODEL
         ai.thinking_type = "disabled"
@@ -88,10 +79,7 @@ class Tarot:
         ai.ai_request()
         if ai.ai_text:
             reply = MessageBuilder().text(ai.ai_text.strip())
-            if robot.msg_type == "group":
-                robot.llbot.send_group_msg(robot.group_id or "", reply.build())
-            else:
-                robot.llbot.send_private_msg(robot.user_id, reply.build())
+            robot.send(reply.build())
 
     def tarot_call(self, robot: Any, ai: Any) -> None:
         tool_calls = ai.ai_message.get("tool_calls")
@@ -128,17 +116,14 @@ class Tarot:
         card = self._draw_card()
 
         # Send card image + name
-        from llbot_client import MessageBuilder
+        from qq_official import MessageBuilder
         builder = MessageBuilder()
         if not is_for_self and target_name:
             builder.text(f"🔮 应 {robot.user_name} 的要求，给 {target_name} 抽了一张塔罗牌！\n\n")
         if card["card_path"]:
             builder.image(card["card_path"])
         builder.text(f"\n🎴 {display_name}的塔罗牌：{card['card_name']}\n{card['card_text']}")
-        if robot.msg_type == "group":
-            robot.llbot.send_group_msg(robot.group_id or "", builder.build())
-        else:
-            robot.llbot.send_private_msg(robot.user_id, builder.build())
+        robot.send(builder.build())
 
         # AI interpretation
         ai.model_type = Config.DEEPSEEK_MODEL
@@ -157,10 +142,7 @@ class Tarot:
             if not is_for_self and target_name:
                 reply_builder.text(f"@{target_name} ")
             reply_builder.text(ai.ai_text.strip())
-            if robot.msg_type == "group":
-                robot.llbot.send_group_msg(robot.group_id or "", reply_builder.build())
-            else:
-                robot.llbot.send_private_msg(robot.user_id, reply_builder.build())
+            robot.send(reply_builder.build())
 
         # Deposit history for the REQUESTER (not target)
         try:
@@ -173,9 +155,8 @@ class Tarot:
 
 
 class Tarot_History:
-    def __init__(self, database_manager: Any, msg_package: Any) -> None:
+    def __init__(self, database_manager: Any) -> None:
         self.database_manager = database_manager
-        self.msg_package = msg_package
 
     def tarot_history_call(self, robot: Any, ai: Any) -> None:
         try:
@@ -203,9 +184,8 @@ class Tarot_History:
 # ══════════════════════════════════════════════════════════
 
 class GamingNews:
-    def __init__(self, crawler: Any, msg_package: Any) -> None:
+    def __init__(self, crawler: Any) -> None:
         self.crawler = crawler
-        self.msg_package = msg_package
 
     def gaming_news_call(self, robot: Any, ai: Any) -> None:
         try:
@@ -235,9 +215,8 @@ class GamingNews:
 # ══════════════════════════════════════════════════════════
 
 class WebSearchTool:
-    def __init__(self, web_search: Any, msg_package: Any) -> None:
+    def __init__(self, web_search: Any) -> None:
         self.web_search = web_search
-        self.msg_package = msg_package
 
     def web_search_call(self, robot: Any, ai: Any) -> None:
         tool_calls = ai.ai_message.get("tool_calls")
@@ -293,9 +272,8 @@ class WebSearchTool:
 # ══════════════════════════════════════════════════════════
 
 class WeatherTool:
-    def __init__(self, weather_service: Any, msg_package: Any) -> None:
+    def __init__(self, weather_service: Any) -> None:
         self.weather_service = weather_service
-        self.msg_package = msg_package
 
     def weather_call(self, robot: Any, ai: Any) -> None:
         tool_calls = ai.ai_message.get("tool_calls")
@@ -335,8 +313,7 @@ class WeatherTool:
 class StickerTool:
     STICKER_DIR = "/app/stickers"
 
-    def __init__(self, msg_package: Any) -> None:
-        self.msg_package = msg_package
+    def __init__(self) -> None:
         self._cache: list[str] = []
 
     def _scan(self) -> list[str]:
@@ -393,12 +370,9 @@ class StickerTool:
             chosen = random.choice(stickers)
 
         # Send image directly, no reply wrapper
-        from llbot_client import MessageBuilder
+        from qq_official import MessageBuilder
         builder = MessageBuilder().image(f"{self.STICKER_DIR}/{chosen}")
-        if robot.msg_type == "group":
-            robot.llbot.send_group_msg(robot.group_id or "", builder.build())
-        else:
-            robot.llbot.send_private_msg(robot.user_id, builder.build())
+        robot.send(builder.build())
         _set_tool_meta(ai, tool_calls)
         ai.user_text = f"发送了表情包({category or '随机'}): {chosen}"
 
@@ -408,9 +382,8 @@ class StickerTool:
 # ══════════════════════════════════════════════════════════
 
 class HitokotoTool:
-    def __init__(self, service: Any, msg_package: Any) -> None:
+    def __init__(self, service: Any) -> None:
         self.service = service
-        self.msg_package = msg_package
 
     def hitokoto_call(self, robot: Any, ai: Any) -> None:
         q = self.service.get_quote()
@@ -446,9 +419,6 @@ class FoodPickerTool:
         "今天试试这个吧～", "不错的选择呢 (◕‿◕✿)",
     ]
 
-    def __init__(self, msg_package: Any) -> None:
-        self.msg_package = msg_package
-
     def food_picker_call(self, robot: Any, ai: Any) -> None:
         food = random.choice(self.FOODS)
         extra = random.choice(self.EXTRAS)
@@ -462,9 +432,6 @@ class FoodPickerTool:
 # ══════════════════════════════════════════════════════════
 
 class DiceTool:
-    def __init__(self, msg_package: Any) -> None:
-        self.msg_package = msg_package
-
     def dice_call(self, robot: Any, ai: Any) -> None:
         tool_calls = ai.ai_message.get("tool_calls")
         sides = 6
@@ -493,9 +460,8 @@ class DiceTool:
 # ══════════════════════════════════════════════════════════
 
 class BilibiliTool:
-    def __init__(self, service: Any, msg_package: Any) -> None:
+    def __init__(self, service: Any) -> None:
         self.service = service
-        self.msg_package = msg_package
 
     def bilibili_call(self, robot: Any, ai: Any) -> None:
         items = self.service.get_trending() or self.service.get_hot_videos()
@@ -511,309 +477,10 @@ class BilibiliTool:
 
 
 # ══════════════════════════════════════════════════════════
-#  Proactive @ Member
-# ══════════════════════════════════════════════════════════
-
-class AtMemberTool:
-    def __init__(self, msg_package: Any, database_manager: Any = None, llbot: Any = None) -> None:
-        self.msg_package = msg_package
-        self.db = database_manager
-        self.llbot = llbot
-
-    def _resolve_target(self, robot: Any, target: str) -> tuple[str | None, str | None]:
-        """Resolve target to (qq_number, display_name).
-        1. '群主' → get_group_info API
-        2. '管理员' → DB role=admin or cached members
-        3. names → DB fuzzy match → cached member list"""
-        target = target.strip()
-        group_id = robot.group_id
-        bot_qq = Config.ROBOT_QQ or ""
-
-        # ── 群主 → use LLBot get_group_info API ──
-        if target == "群主":
-            if self.llbot and group_id:
-                info = self.llbot.get_group_info(group_id)
-                if info:
-                    owner_uid = str(info.get("owner_id", "") or info.get("owner_user_id", ""))
-                    if owner_uid:
-                        # Guard: never resolve to the bot itself
-                        if owner_uid == bot_qq or owner_uid == robot.user_id:
-                            logger.debug("Skipping self-resolution (owner is bot)")
-                            return (None, None)
-                        # Try cached members or DB for owner's name
-                        if self.db:
-                            cached = self.db._member_cache.get(group_id, [])
-                            for m in cached:
-                                if m["user_id"] == owner_uid:
-                                    return (owner_uid, m["user_name"] or "群主")
-                            rows = self.db.fetch_data(
-                                "SELECT user_name FROM group_messages WHERE group_id=? AND user_id=? LIMIT 1",
-                                (group_id, owner_uid),
-                            )
-                            if rows:
-                                return (owner_uid, rows[0][0])
-                        return (owner_uid, "群主")
-            # Fallback: cached members with role=owner
-            if self.db:
-                qq, name = self.db.find_member_by_role(group_id, "owner")
-                if qq and qq != bot_qq and qq != robot.user_id:
-                    return (qq, name)
-
-        # ── 管理员 → cached members + DB ──
-        if target in ("管理员", "群管理", "管理"):
-            if self.db:
-                qq, name = self.db.find_member_by_role(group_id, "admin")
-                if qq and qq != robot.user_id and qq != bot_qq:
-                    return (qq, name)
-
-        # ── Name match → DB first, then cached members ──
-        if self.db:
-            qq, name = self.db.find_member_by_name(group_id, target)
-            if qq:
-                # Guard: never resolve to the bot itself
-                if qq == bot_qq or qq == robot.user_id:
-                    logger.debug("Skipping self-resolution (name matched bot)")
-                    return (None, None)
-                return (qq, name)
-
-        return (None, None)
-
-    def at_member_call(self, robot: Any, ai: Any) -> None:
-        tool_calls = ai.ai_message.get("tool_calls")
-        if not tool_calls:
-            return
-
-        try:
-            args = json.loads(tool_calls[0]["function"].get("arguments", "{}"))
-        except (json.JSONDecodeError, TypeError):
-            args = {}
-        target = args.get("target_name", "").strip()
-        message = args.get("message", "").strip()
-
-        if not target or not message:
-            return
-
-        # Resolve to QQ number + display name
-        target_qq, display_name = self._resolve_target(robot, target)
-        if not target_qq or not display_name:
-            robot.reply(
-                f"呜～Kiriko没找到「{target}」呢 (｡•́︿•̀｡)\n"
-                "可能ta还没在群里说过话，换个方式试试？"
-            )
-            _set_tool_meta(ai, tool_calls)
-            return
-
-        # Generate the message via AI
-        ai.model_type = Config.DEEPSEEK_MODEL
-        ai.thinking_type = "disabled"
-        ai.system_text = (
-            f"你是Kiriko。你要主动@群友{display_name}说一句话。"
-            f"意图：{message}。语气可爱自然，20字以内。"
-        )
-        ai.user_text = f"请对{display_name}说一句话"
-        ai.ai_request()
-
-        content = ai.ai_text.strip() if ai.ai_text else message
-
-        # Use proper OneBot at segment with QQ number
-        from llbot_client import MessageBuilder
-        builder = MessageBuilder()
-        builder.at(target_qq)
-        builder.text(f" {content}")
-
-        if robot.msg_type == "group":
-            robot.llbot.send_group_msg(robot.group_id or "", builder.build())
-        else:
-            # Private context: at_member is a group-only feature.
-            # Send plain text without invalid @-segment.
-            pm_builder = MessageBuilder()
-            pm_builder.text(f"想对 {display_name} 说：{content}")
-            robot.llbot.send_private_msg(robot.user_id, pm_builder.build())
-
-        _set_tool_meta(ai, tool_calls)
-        ai.user_text = f"@了{display_name}({target_qq}): {content}"
-
-
-# ══════════════════════════════════════════════════════════
-#  Reminder
-# ══════════════════════════════════════════════════════════
-
-class ReminderTool:
-    def __init__(self, database_manager: Any, msg_package: Any) -> None:
-        self.db = database_manager
-        self.msg_package = msg_package
-
-    def set_reminder_call(self, robot: Any, ai: Any) -> None:
-        tool_calls = ai.ai_message.get("tool_calls")
-        if not tool_calls:
-            return
-
-        try:
-            args = json.loads(tool_calls[0]["function"].get("arguments", "{}"))
-        except (json.JSONDecodeError, TypeError):
-            args = {}
-        user_msg = args.get("user_message", "") or robot.msg
-
-        from scheduler import parse_reminder_time
-        remind_time, content, repeat_daily = parse_reminder_time(user_msg)
-
-        if not remind_time:
-            ai.tool_result_text = f"提醒设置失败：{content}"
-            _set_tool_meta(ai, tool_calls)
-            ai.user_text = ai.tool_result_text
-            return
-
-        from datetime import datetime
-        try:
-            rt = datetime.strptime(remind_time, "%Y-%m-%d %H:%M:%S")
-            if rt <= datetime.now():
-                ai.tool_result_text = "提醒时间已过期，无法设置"
-                _set_tool_meta(ai, tool_calls)
-                ai.user_text = ai.tool_result_text
-                return
-        except ValueError:
-            ai.tool_result_text = "提醒时间计算错误"
-            _set_tool_meta(ai, tool_calls)
-            ai.user_text = ai.tool_result_text
-            return
-
-        try:
-            self.db.deposit(
-                "reminders",
-                "(user_id, group_id, user_name, content, remind_time, repeat_daily)",
-                "(?, ?, ?, ?, ?, ?)",
-                (robot.user_id, robot.group_id, robot.user_name, content, remind_time, repeat_daily),
-            )
-        except Exception:
-            logger.exception("Failed to save reminder")
-            ai.tool_result_text = "提醒保存失败（数据库错误）"
-            _set_tool_meta(ai, tool_calls)
-            ai.user_text = ai.tool_result_text
-            return
-
-        friendly = rt.strftime("%m月%d日 %H:%M:%S")
-        if repeat_daily:
-            ai.tool_result_text = f"每日提醒已设置：每天 {rt.strftime('%H:%M:%S')} 提醒内容：{content}"
-        else:
-            ai.tool_result_text = f"提醒已设置：{friendly} 提醒内容：{content}"
-
-        _set_tool_meta(ai, tool_calls)
-        ai.user_text = ai.tool_result_text
-
-
-# ══════════════════════════════════════════════════════════
-#  List Reminders
-# ══════════════════════════════════════════════════════════
-
-class ListRemindersTool:
-    def __init__(self, database_manager: Any, msg_package: Any) -> None:
-        self.db = database_manager
-        self.msg_package = msg_package
-
-    def list_reminders_call(self, robot: Any, ai: Any) -> None:
-        try:
-            rows = self.db.fetch_data(
-                "SELECT id, content, remind_time, fired, repeat_daily FROM reminders "
-                "WHERE user_id = ? ORDER BY remind_time",
-                (robot.user_id,),
-            )
-        except Exception:
-            logger.exception("List reminders failed")
-            ai.tool_result_text = "获取提醒列表失败"
-            _set_tool_meta(ai, ai.ai_message.get("tool_calls"))
-            ai.user_text = ai.tool_result_text
-            return
-
-        if not rows:
-            ai.tool_result_text = "你当前没有设置任何提醒"
-        else:
-            lines = ["你的提醒列表："]
-            for rid, content, rt, fired, repeat in rows:
-                tag = "✓" if fired else "⏳"
-                rep = " [每日]" if repeat else ""
-                lines.append(f"  #{rid} {tag}{rep} {rt} — {content}")
-            ai.tool_result_text = "\n".join(lines)
-
-        _set_tool_meta(ai, ai.ai_message.get("tool_calls"))
-        ai.user_text = ai.tool_result_text
-
-
-# ══════════════════════════════════════════════════════════
-#  Delete Reminder
-# ══════════════════════════════════════════════════════════
-
-class DeleteReminderTool:
-    def __init__(self, database_manager: Any, msg_package: Any) -> None:
-        self.db = database_manager
-        self.msg_package = msg_package
-
-    def delete_reminder_call(self, robot: Any, ai: Any) -> None:
-        tool_calls = ai.ai_message.get("tool_calls")
-        if not tool_calls:
-            return
-
-        try:
-            args = json.loads(tool_calls[0]["function"].get("arguments", "{}"))
-        except (json.JSONDecodeError, TypeError):
-            args = {}
-        reminder_id = args.get("reminder_id", 0)
-        keyword = args.get("keyword", "").strip()
-
-        if reminder_id:
-            # Delete by ID
-            rows = self.db.fetch_data(
-                "SELECT id, content FROM reminders WHERE id = ? AND user_id = ?",
-                (reminder_id, robot.user_id),
-            )
-            if not rows:
-                ai.tool_result_text = f"未找到 #{reminder_id} 提醒，可能不属于你或已被删除"
-                _set_tool_meta(ai, tool_calls)
-                ai.user_text = ai.tool_result_text
-                return
-            try:
-                self.db.execute_action("DELETE FROM reminders WHERE id = ?", (reminder_id,))
-                ai.tool_result_text = f"已删除提醒 #{reminder_id}：{rows[0][1]}"
-            except Exception:
-                logger.exception("Failed to delete reminder #%d", reminder_id)
-                ai.tool_result_text = "删除提醒失败（数据库错误）"
-        elif keyword:
-            # Delete by content keyword match
-            rows = self.db.fetch_data(
-                "SELECT id, content FROM reminders WHERE user_id = ? AND content LIKE ? AND fired = 0",
-                (robot.user_id, f"%{keyword}%"),
-            )
-            if not rows:
-                ai.tool_result_text = f"未找到包含「{keyword}」的待触发提醒"
-                _set_tool_meta(ai, tool_calls)
-                ai.user_text = ai.tool_result_text
-                return
-            if len(rows) > 1:
-                lines = [f"找到 {len(rows)} 个匹配的提醒，请指定要删除的编号："]
-                for rid, content in rows:
-                    lines.append(f"  #{rid} — {content}")
-                ai.tool_result_text = "\n".join(lines)
-            else:
-                try:
-                    self.db.execute_action("DELETE FROM reminders WHERE id = ?", (rows[0][0],))
-                    ai.tool_result_text = f"已删除提醒 #{rows[0][0]}：{rows[0][1]}"
-                except Exception:
-                    logger.exception("Failed to delete reminder")
-                    ai.tool_result_text = "删除提醒失败（数据库错误）"
-        else:
-            ai.tool_result_text = "请指定要删除的提醒编号或关键词"
-
-        _set_tool_meta(ai, tool_calls)
-        ai.user_text = ai.tool_result_text
-
-
-# ══════════════════════════════════════════════════════════
 #  Current Time
 # ══════════════════════════════════════════════════════════
 
 class TimeTool:
-    def __init__(self, msg_package: Any) -> None:
-        self.msg_package = msg_package
-
     def get_current_time_call(self, robot: Any, ai: Any) -> None:
         from datetime import datetime
         now = datetime.now()
@@ -829,9 +496,8 @@ class TimeTool:
 # ══════════════════════════════════════════════════════════
 
 class PoliticalNewsTool:
-    def __init__(self, scraper: Any, msg_package: Any) -> None:
+    def __init__(self, scraper: Any) -> None:
         self.scraper = scraper
-        self.msg_package = msg_package
 
     def political_news_call(self, robot: Any, ai: Any) -> None:
         try:
@@ -891,9 +557,8 @@ class PoliticalNewsTool:
 # ══════════════════════════════════════════════════════════
 
 class BalanceTool:
-    def __init__(self, service: Any, msg_package: Any) -> None:
+    def __init__(self, service: Any) -> None:
         self.service = service
-        self.msg_package = msg_package
 
     def balance_call(self, robot: Any, ai: Any) -> None:
         try:
@@ -911,9 +576,8 @@ class BalanceTool:
 # ══════════════════════════════════════════════════════════
 
 class FeatureRequestTool:
-    def __init__(self, db: Any, msg_package: Any) -> None:
+    def __init__(self, db: Any) -> None:
         self.db = db
-        self.msg_package = msg_package
 
     def feature_request_call(self, robot: Any, ai: Any) -> None:
         tool_calls = ai.ai_message.get("tool_calls")
@@ -987,9 +651,8 @@ class FeatureRequestTool:
 # ══════════════════════════════════════════════════════════
 
 class MusicTool:
-    def __init__(self, music_service: Any, msg_package: Any) -> None:
+    def __init__(self, music_service: Any) -> None:
         self.service = music_service
-        self.msg_package = msg_package
         self._recent_songs: dict[str, float] = {}  # dedup_key → timestamp
         self._recent_keywords: dict[str, str] = {}  # dedup_key → last keyword used
 
@@ -1007,7 +670,7 @@ class MusicTool:
         if not keyword:
             keyword = robot.msg
 
-        from llbot_client import MessageBuilder
+        from qq_official import MessageBuilder
         import time as _time
 
         # Search for the best matching song
@@ -1023,7 +686,6 @@ class MusicTool:
         artist = song_info.get("artist", "未知歌手")
         name = song_info.get("name", "未知歌曲")
         album = song_info.get("album", "")
-        music_type = song_info.get("music_type", "163")
 
         now = _time.time()
         dedup_key = f"{robot.group_id or robot.user_id}:{song_id}"
@@ -1046,7 +708,6 @@ class MusicTool:
                     artist = alt.get("artist", "未知歌手")
                     name = alt.get("name", "未知歌曲")
                     album = alt.get("album", "")
-                    music_type = alt.get("music_type", "163")
                     dedup_key = alt_key
                     logger.info("Music dedup: using alternative '%s - %s'", name, artist)
                     break
@@ -1068,47 +729,25 @@ class MusicTool:
             k: v for k, v in self._recent_keywords.items() if k in self._recent_songs
         }
 
-        # ── 1. Send song info text first ──
+        # ── 发送歌曲信息 ──
+        #
+        # 官方平台**没有音乐卡片**这个东西。OneBot 时代是靠 music 段
+        # （`{"type":"music","data":{"type":"163","id":...}}`）让 QQ 渲染出可播放的
+        # 卡片，而官方的 `MessageBuilder` 只有 text/image/at/reply 四种段，
+        # 富媒体上传也只认图片/视频/语音/文件四类 —— **音乐分享不在其中**。
+        #
+        # 也试过把下载到的 mp3 当语音发：官方要求语音必须是 **silk** 格式
+        # （见富媒体文档的「资源格式要求」），而网易云下到的是 mp3，转 silk 需要
+        # 额外的编码器，不划算。所以这里给**可点击的歌曲链接**，让它至少能听得到。
         info_lines = [f"🎵 {name}", f"👤 {artist}"]
         if album:
             info_lines.append(f"💿 {album}")
         info_lines.append("")
+        info_lines.append(f"🔗 https://music.163.com/#/song?id={song_id}")
 
-        # ── 2. Send music share card (QQ native music UI) ──
-        info_lines.append(f"🎧 正在播放，点击收听 ↑")
+        robot.send(MessageBuilder().text("\n".join(info_lines)).build())
 
-        info_builder = MessageBuilder()
-        info_builder.text("\n".join(info_lines))
-        if robot.msg_type == "group":
-            robot.llbot.send_group_msg(robot.group_id or "", info_builder.build())
-        else:
-            robot.llbot.send_private_msg(robot.user_id, info_builder.build())
-
-        # Send the music share card — this renders as a beautiful playable card in QQ
-        music_builder = MessageBuilder()
-        music_builder.music(music_type, str(song_id))
-        if robot.msg_type == "group":
-            robot.llbot.send_group_msg(robot.group_id or "", music_builder.build())
-        else:
-            robot.llbot.send_private_msg(robot.user_id, music_builder.build())
-
-        logger.info("Music shared: %s - %s (id=%s, type=%s)", name, artist, song_id, music_type)
-
-        # ── 3. Try audio download as bonus (best-effort) ──
-        try:
-            audio_path = self.service.download_audio(
-                song_info.get("audio_url", ""), song_id
-            )
-            if audio_path:
-                record_builder = MessageBuilder()
-                record_builder.record(audio_path)
-                if robot.msg_type == "group":
-                    robot.llbot.send_group_msg(robot.group_id or "", record_builder.build())
-                else:
-                    robot.llbot.send_private_msg(robot.user_id, record_builder.build())
-                logger.info("Audio voice message also sent for %s - %s", name, artist)
-        except Exception:
-            logger.debug("ai_tools.music_search_call 忽略了异常", exc_info=True)
+        logger.info("Music shared: %s - %s (id=%s)", name, artist, song_id)
 
         _set_tool_meta(ai, tool_calls)
         ai.user_text = f"播放歌曲: {name} - {artist}"
@@ -1138,9 +777,8 @@ class StickerBattleTool:
         - total_score: accumulated score across rounds
     """
 
-    def __init__(self, msg_package: Any, llbot: Any, sticker_tool: StickerTool, battle_state: dict) -> None:
-        self.msg_package = msg_package
-        self.llbot = llbot
+    def __init__(self, client: Any, sticker_tool: StickerTool, battle_state: dict) -> None:
+        self.client = client
         self.sticker_tool = sticker_tool
         self.battle_state = battle_state
 
@@ -1193,7 +831,7 @@ class StickerBattleTool:
         self.battle_state[battle_key] = battle
 
         # Send first sticker + challenge message
-        from llbot_client import MessageBuilder
+        from qq_official import MessageBuilder
         builder = MessageBuilder()
         builder.image(f"{self.sticker_tool.STICKER_DIR}/{chosen}")
         challenge = random.choice([
@@ -1203,10 +841,7 @@ class StickerBattleTool:
             "哼！让你见识见识我的厉害！",
         ])
         builder.text(f"\n{challenge} (第1/{BATTLE_DEFAULT_ROUNDS}轮)")
-        if robot.msg_type == "group":
-            self.llbot.send_group_msg(robot.group_id or "", builder.build())
-        else:
-            self.llbot.send_private_msg(robot.user_id, builder.build())
+        robot.send(builder.build())
 
         logger.info("Battle started for %s (key=%s), first sticker: %s", robot.user_name, battle_key, chosen)
 
@@ -1221,8 +856,7 @@ class StickerBattleTool:
 class AffectionTool:
     """FOLLOW_UP tool: returns affection data for AI to format as reply."""
 
-    def __init__(self, msg_package: Any, database_manager: Any) -> None:
-        self.msg_package = msg_package
+    def __init__(self, database_manager: Any) -> None:
         self.db = database_manager
 
     def check_affection_call(self, robot: Any, ai: Any) -> None:
@@ -1286,8 +920,7 @@ class AffectionTool:
 class AffectionLeaderboardTool:
     """FOLLOW_UP tool: returns leaderboard for AI to format as reply."""
 
-    def __init__(self, msg_package: Any, database_manager: Any) -> None:
-        self.msg_package = msg_package
+    def __init__(self, database_manager: Any) -> None:
         self.db = database_manager
 
     def affection_leaderboard_call(self, robot: Any, ai: Any) -> None:
@@ -1331,9 +964,9 @@ class RecallMessageTool:
 
     RECALL_WINDOW = 110  # seconds, comfortably inside QQ's ~2 minute limit
 
-    def __init__(self, database_manager: Any, llbot: Any) -> None:
+    def __init__(self, database_manager: Any, client: Any) -> None:
         self.db = database_manager
-        self.llbot = llbot
+        self.client = client
 
     def recall_message_call(self, robot: Any, ai: Any) -> None:
         _set_tool_meta(ai, ai.ai_message.get("tool_calls"))
@@ -1352,7 +985,7 @@ class RecallMessageTool:
             ai.user_text = ai.tool_result_text
             return
 
-        if self.llbot.recall(last["message_id"]):
+        if self.client.recall(last["message_id"]):
             self.db.mark_bot_message_recalled(last["message_id"])
             preview = (last["text"] or "").strip()[:20]
             logger.info("Recalled own message %s in group %s", last["message_id"], robot.group_id)
@@ -1370,196 +1003,6 @@ class RecallMessageTool:
 
 
 # ══════════════════════════════════════════════════════════
-#  Group activity stats (单群单日发言统计)
-# ══════════════════════════════════════════════════════════
-
-class GroupStatsTool:
-    """FOLLOW_UP tool: one day of activity for the current group."""
-
-    def __init__(self, database_manager: Any, msg_package: Any) -> None:
-        self.db = database_manager
-        self.msg_package = msg_package
-
-    def group_stats_call(self, robot: Any, ai: Any) -> None:
-        from datetime import datetime, timedelta
-
-        tool_calls = ai.ai_message.get("tool_calls")
-        _set_tool_meta(ai, tool_calls)
-
-        args: dict[str, Any] = {}
-        if tool_calls:
-            try:
-                args = json.loads(tool_calls[0]["function"].get("arguments", "{}"))
-            except (json.JSONDecodeError, TypeError):
-                args = {}
-
-        raw_day = str(args.get("day") or "today").strip().lower()
-        today = datetime.now()
-        if raw_day in ("today", "今天", ""):
-            day = today.strftime("%Y-%m-%d")
-        elif raw_day in ("yesterday", "昨天"):
-            day = (today - timedelta(days=1)).strftime("%Y-%m-%d")
-        else:
-            day = raw_day
-
-        if not robot.group_id:
-            ai.tool_result_text = "这个功能只能在群里用。"
-            ai.user_text = ai.tool_result_text
-            return
-
-        try:
-            stats = self.db.get_daily_group_stats(robot.group_id, day)
-        except Exception:
-            logger.exception("Group stats failed")
-            ai.tool_result_text = "统计查询失败了，稍后再试吧。"
-            ai.user_text = ai.tool_result_text
-            return
-
-        if not stats["total"]:
-            ai.tool_result_text = f"{day} 这个群还没有说话记录。用自然的语气说一下今天很安静即可。"
-            ai.user_text = ai.tool_result_text
-            return
-
-        lines = [
-            f"{day} 的发言统计（数据可直接用于回复）：",
-            f"- 总消息：{stats['total']} 条",
-            f"- 活跃人数：{stats['active_users']} 人",
-            f"- 其中图片/表情：{stats['images']} 条",
-        ]
-        if stats["top"]:
-            lines.append("- 发言最多：")
-            for i, item in enumerate(stats["top"][:5], 1):
-                lines.append(f"    {i}. {item['user_name']} — {item['count']} 条")
-        peak = max(range(24), key=lambda h: stats["hourly"][h])
-        if stats["hourly"][peak]:
-            lines.append(f"- 最热闹的时段：{peak:02d}:00 - {peak + 1:02d}:00（{stats['hourly'][peak]} 条）")
-        lines.append("请用 Kiriko 的语气把这些数据讲出来，不要直接念条目。")
-
-        ai.tool_result_text = "\n".join(lines)
-        ai.user_text = ai.tool_result_text
-
-
-# ══════════════════════════════════════════════════════════
-#  Read group context (AI 自决获取整体语境)
-# ══════════════════════════════════════════════════════════
-
-# Repeat guard. The prompt asks the model to look only when it is genuinely
-# lost, but prompts fail — measured on a live group, read_context fired on
-# "收到", "[图片消息]" and "你好，死傲娇". Each call dumps a transcript in
-# front of the model and the reply then answers the transcript instead of the
-# person, so a second look within a couple of minutes gets a *much* smaller
-# slice. Keyed per (group, user) because that is the scope of "did I just look
-# at this conversation".
-_context_seen: dict[tuple[str, str], float] = {}
-_context_lock = threading.Lock()
-CONTEXT_REPEAT_MINUTES = 3
-CONTEXT_REPEAT_LIMIT = 5
-
-
-def _just_looked(group_id: str, user_id: str) -> bool:
-    """True if this user already pulled the transcript very recently."""
-    key = (group_id or "", user_id or "")
-    now = time.time()
-    with _context_lock:
-        last = _context_seen.get(key, 0.0)
-        _context_seen[key] = now
-        # Keep the dict from growing without bound on a busy bot.
-        if len(_context_seen) > 500:
-            cutoff = now - CONTEXT_REPEAT_MINUTES * 60
-            for k in [k for k, v in _context_seen.items() if v < cutoff]:
-                _context_seen.pop(k, None)
-    return (now - last) < CONTEXT_REPEAT_MINUTES * 60
-
-
-class ReadContextTool:
-    """FOLLOW_UP tool: pull the recent group transcript when the model asks.
-
-    Deliberately tool-driven rather than always-on: attaching a transcript to
-    every message would multiply token cost, and the model usually knows when
-    it is missing something.
-    """
-
-    def __init__(self, database_manager: Any, msg_package: Any) -> None:
-        self.db = database_manager
-        self.msg_package = msg_package
-
-    def read_context_call(self, robot: Any, ai: Any) -> None:
-        tool_calls = ai.ai_message.get("tool_calls")
-        _set_tool_meta(ai, tool_calls)
-
-        args: dict[str, Any] = {}
-        if tool_calls:
-            try:
-                args = json.loads(tool_calls[0]["function"].get("arguments", "{}"))
-            except (json.JSONDecodeError, TypeError):
-                args = {}
-
-        # Small by default. A big transcript does not just cost tokens — it
-        # pushes the actual message out of the model's attention, and the
-        # replies then answer the transcript instead of the person.
-        minutes = args.get("minutes", 15)
-        limit = args.get("limit", 20)
-
-        if not robot.group_id:
-            ai.tool_result_text = "只有在群里才需要读群聊记录。"
-            ai.user_text = ai.tool_result_text
-            return
-
-        repeated = _just_looked(robot.group_id or "", robot.user_id)
-        if repeated:
-            logger.info("read_context 短时间内重复调用，只给最近几条：%s", robot.user_name)
-            limit = min(limit, CONTEXT_REPEAT_LIMIT)
-
-        try:
-            rows = self.db.get_recent_group_context(
-                robot.group_id, minutes=minutes, limit=limit,
-                exclude_message_id=robot.incoming.message_id,
-            )
-        except Exception:
-            logger.exception("read_context failed")
-            ai.tool_result_text = "读取群聊记录失败了。"
-            ai.user_text = ai.tool_result_text
-            return
-
-        if not rows:
-            ai.tool_result_text = (
-                f"最近 {minutes} 分钟群里没有别的消息（当前这条已经排除）。"
-                "也就是说这句话没有可供参考的前文——**直接按字面回答，或者问对方指的是什么**，"
-                "不要因为查了记录就硬找话说。"
-            )
-            ai.user_text = ai.tool_result_text
-            return
-
-        # The framing comes FIRST as well as last. Without it the model treats
-        # the transcript as the thing to answer — which is exactly the "replied
-        # to an old message" bug, caused by the tool rather than by history.
-        lines = [
-            "【以下只是背景，不是要你回应的话。你唯一要回应的是当前这一条消息。】",
-            f"本群最近 {minutes} 分钟的聊天记录（已排除当前这条，按时间正序）：",
-        ]
-        for r in rows:
-            hhmm = str(r.get("timestamp") or "")[11:16]
-            who = self.db.BOT_DISPLAY_NAME if r.get("is_bot") else r.get("user_name", "?")
-            text = " ".join(str(r.get("content") or "").split())
-            if len(text) > _CONTEXT_LINE_LIMIT:
-                text = text[:_CONTEXT_LINE_LIMIT] + "…"
-            lines.append(f"[{hhmm}] {who}：{text}")
-        lines.append(
-            "【背景到此结束。】以上内容只用来理解当前那句话在说什么："
-            "不要回应背景里的任何一条，不要复述，也不要提「我看了聊天记录」。"
-            "如果看完还是不知道对方指什么，就直接问，别猜。"
-        )
-        if repeated:
-            lines.append(
-                "（你刚刚已经看过更长的版本了，所以这里只给最近几条。"
-                "别再查了，直接回答当前这条。）"
-            )
-
-        ai.tool_result_text = "\n".join(lines)
-        ai.user_text = ai.tool_result_text
-
-
-# ══════════════════════════════════════════════════════════
 #  Feature list (群友提交的功能需求)
 # ══════════════════════════════════════════════════════════
 
@@ -1568,9 +1011,8 @@ class FeatureListTool:
 
     STATUS_LABEL = {"pending": "待处理", "done": "已完成", "rejected": "已拒绝"}
 
-    def __init__(self, database_manager: Any, msg_package: Any) -> None:
+    def __init__(self, database_manager: Any) -> None:
         self.db = database_manager
-        self.msg_package = msg_package
 
     def feature_list_call(self, robot: Any, ai: Any) -> None:
         tool_calls = ai.ai_message.get("tool_calls")
@@ -1634,9 +1076,8 @@ class ExplainSelfTool:
     MAX_TOTAL = 8000      # matches the history.reasoning storage cap
     CHUNK = 1200          # keep each QQ text segment comfortably small
 
-    def __init__(self, database_manager: Any, msg_package: Any) -> None:
+    def __init__(self, database_manager: Any) -> None:
         self.db = database_manager
-        self.msg_package = msg_package
 
     def explain_self_call(self, robot: Any, ai: Any) -> None:
         _set_tool_meta(ai, ai.ai_message.get("tool_calls"))
@@ -1726,7 +1167,7 @@ class ExplainSelfTool:
         return chunks or [text]
 
     def _send(self, robot: Any, text: str) -> None:
-        from llbot_client import MessageBuilder
+        from qq_official import MessageBuilder
 
         chunks = self._split(text)
         total = len(chunks)
@@ -1738,102 +1179,10 @@ class ExplainSelfTool:
                 builder.reply(robot.incoming.message_id)
             builder.text(body)
             try:
-                if robot.msg_type == "group":
-                    robot.llbot.send_group_msg(robot.group_id or "", builder.build())
-                else:
-                    robot.llbot.send_private_msg(robot.user_id, builder.build())
+                robot.send(builder.build())
             except Exception:
                 logger.exception("explain_self send failed")
                 return
-
-
-# ══════════════════════════════════════════════════════════
-#  Voice (直接说话，而不是打字)
-# ══════════════════════════════════════════════════════════
-
-class VoiceTool:
-    """SELF-CONTAINED tool: speak the reply with QQ's AI voice.
-
-    The model decides whether speaking fits the moment and which timbre to use.
-    It is self-contained because the voice *is* the reply — a follow-up turn
-    would only add a typed duplicate on top of it.
-
-    Character ids are validated against `get_ai_characters` rather than trusted:
-    the endpoint happily accepts an unknown id and then silently fails to
-    deliver, which would look like the bot ignoring people.
-    """
-
-    def __init__(self, database_manager: Any, msg_package: Any, llbot: Any = None) -> None:
-        self.db = database_manager
-        self.msg_package = msg_package
-        self.llbot = llbot
-
-    def voice_call(self, robot: Any, ai: Any) -> None:
-        tool_calls = ai.ai_message.get("tool_calls")
-        _set_tool_meta(ai, tool_calls)
-
-        args: dict[str, Any] = {}
-        if tool_calls:
-            try:
-                args = json.loads(tool_calls[0]["function"].get("arguments", "{}"))
-            except (json.JSONDecodeError, TypeError):
-                args = {}
-
-        text = str(args.get("text") or "").strip()
-        character = str(args.get("voice") or "").strip() or Config.VOICE_DEFAULT_CHARACTER
-
-        if robot.msg_type != "group" or not robot.group_id:
-            ai.tool_result_text = (
-                "私聊里发不了语音（这个功能只支持群）。"
-                "直接用文字把刚才想说的话说出来即可，不要提这件事。"
-            )
-            ai.user_text = ai.tool_result_text
-            return
-
-        if not text:
-            ai.tool_result_text = "要说的内容为空，没发出去。用文字回答即可。"
-            ai.user_text = ai.tool_result_text
-            return
-
-        character = self._validated_character(character)
-
-        try:
-            ok = bool(self.llbot and self.llbot.send_ai_voice(
-                robot.group_id, character, text))
-        except Exception:
-            logger.exception("voice send failed")
-            ok = False
-
-        if ok:
-            logger.info("语音已发送（%s）：%s", character, text[:40])
-            ai.tool_result_text = (
-                "语音已经发出去了，本轮不要再打字重复一遍，也不要说明你发了语音。"
-            )
-        else:
-            logger.info("语音发送失败，回退文字：%s", text[:40])
-            # Falling back to text is the whole point of not trusting the API:
-            # a silent failure would look like the bot ignoring the message.
-            ai.tool_result_text = (
-                "语音没发出去（功能不可用）。请直接用文字把刚才那句话正常说出来，"
-                "不要提语音、也不要道歉。"
-            )
-        ai.user_text = ai.tool_result_text
-
-    def _validated_character(self, wanted: str) -> str:
-        """Return `wanted` if QQ offers it, else the configured default."""
-        try:
-            available = {c["id"] for c in (self.llbot.get_ai_characters() if self.llbot else [])}
-        except Exception:
-            logger.debug("character list unavailable", exc_info=True)
-            return wanted or Config.VOICE_DEFAULT_CHARACTER
-        if not available:
-            return wanted or Config.VOICE_DEFAULT_CHARACTER
-        if wanted in available:
-            return wanted
-        logger.info("未知音色 %r，回退默认", wanted)
-        if Config.VOICE_DEFAULT_CHARACTER in available:
-            return Config.VOICE_DEFAULT_CHARACTER
-        return sorted(available)[0]
 
 
 # ══════════════════════════════════════════════════════════
@@ -1847,9 +1196,8 @@ class SimilarStickerTool:
     de-duplication, so this costs nothing extra to build.
     """
 
-    def __init__(self, collector: Any, msg_package: Any) -> None:
+    def __init__(self, collector: Any) -> None:
         self.collector = collector
-        self.msg_package = msg_package
 
     def similar_sticker_call(self, robot: Any, ai: Any) -> None:
         import os
@@ -1914,12 +1262,9 @@ class SimilarStickerTool:
             return
 
         try:
-            from llbot_client import MessageBuilder
+            from qq_official import MessageBuilder
             builder = MessageBuilder().image(path)
-            if robot.msg_type == "group":
-                robot.llbot.send_group_msg(robot.group_id or "", builder.build())
-            else:
-                robot.llbot.send_private_msg(robot.user_id, builder.build())
+            robot.send(builder.build())
             logger.info("Similar sticker sent: %s (distance %d)", best_file, best_dist)
             ai.tool_result_text = (
                 f"已经发出表情库里最像的一张（差异值 {best_dist}，越小越像）。"
@@ -1928,4 +1273,66 @@ class SimilarStickerTool:
         except Exception:
             logger.exception("similar sticker send failed")
             ai.tool_result_text = "发送相似表情失败了，如实说明即可。"
+        ai.user_text = ai.tool_result_text
+
+
+# ══════════════════════════════════════════════════════════
+#  Amp head library (on demand)
+# ══════════════════════════════════════════════════════════
+
+class AmpHeadTool:
+    """吉他箱头资料库——**按需**推荐一条。
+
+    以前这是每天定时往群里推一条（`scheduler._build_amp_head` + 推送订阅的
+    `amp_head` 话题）。官方平台没有主动推送，那条路径整个删掉了，于是这个
+    资料库在界面上只剩「箱头库」页能翻。改成工具后，群友直接问就能拿到，
+    资料库也重新有了用处。
+
+    仍然复用 `db.get_amp_head_of_the_day()`：按 day-of-year 在库里轮转，
+    保证一轮之内不重复（比 ORDER BY RANDOM() 好——随机会连着两天抽到同一个，
+    看起来像 bug），而且同一天所有人拿到的是同一个箱头，方便群里聊起来。
+    """
+
+    def __init__(self, db: Any) -> None:
+        self.db = db
+
+    def amp_head_call(self, robot: Any, ai: Any) -> None:
+        tool_calls = ai.ai_message.get("tool_calls")
+        try:
+            head = self.db.get_amp_head_of_the_day()
+        except Exception:
+            logger.exception("amp_head lookup failed")
+            head = None
+
+        if not head:
+            ai.tool_result_text = "箱头资料库里暂时没有可以推荐的条目，如实说一声就行。"
+            _set_tool_meta(ai, tool_calls)
+            ai.user_text = ai.tool_result_text
+            return
+
+        brand = (head.get("brand") or "").strip()
+        model = (head.get("model") or "").strip()
+        name = " ".join(p for p in (brand, model) if p) or "某台箱头"
+
+        lines = [f"今天的箱头：{name}"]
+        # 只列真正有值的字段——资料库是从 Wikipedia 整理的，个别条目会缺项，
+        # 空字段硬写会变成「年份：」这种半截话。
+        labels = [
+            ("year", "年份"), ("origin", "产地"), ("kind", "类型"),
+            ("power", "功率"), ("tubes", "电子管"), ("tone", "音色特点"),
+            ("famous", "用过它的名人"), ("tip", "小贴士"),
+        ]
+        for field, label in labels:
+            val = str(head.get(field) or "").strip()
+            if val:
+                lines.append(f"- {label}：{val}")
+        price = str(head.get("price") or "").strip()
+        if price:
+            # 价格是从公开资料整理的，会随时间变化，必须标明是参考值
+            lines.append(f"- 参考价（约，可能已过时）：{price}")
+        if (head.get("source") or "") == "wikipedia":
+            lines.append("（资料由 Wikipedia 词条整理）")
+
+        ai.tool_result_text = "\n".join(lines)
+        _set_tool_meta(ai, tool_calls)
         ai.user_text = ai.tool_result_text
