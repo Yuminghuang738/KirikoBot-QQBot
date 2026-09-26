@@ -106,8 +106,6 @@ class MusicService:
                 "cover": cover,
                 "audio_url": audio_url,
                 "duration": duration_sec,
-                # OneBot music share card uses this
-                "music_type": "163",  # Netease Cloud Music
             })
 
         return results
@@ -139,53 +137,3 @@ class MusicService:
                 return m.group(1)
         return None
 
-    def download_audio(self, audio_url: str, song_id: int) -> str | None:
-        """Attempt to download audio file. Returns local path or None.
-
-        Netease anti-hotlinking often blocks this — it's a best-effort attempt.
-        """
-        import os
-        import tempfile
-
-        try:
-            r = requests.get(
-                audio_url,
-                timeout=30,
-                headers=self.HEADERS,
-                stream=True,
-                allow_redirects=True,
-            )
-            r.raise_for_status()
-
-            # Check if we got actual audio or HTML
-            content_type = r.headers.get("Content-Type", "")
-            if "text/html" in content_type or "text/plain" in content_type:
-                # Likely got a redirect page or error page instead of audio
-                # Read a small chunk to confirm
-                chunk = r.raw.read(512)
-                if chunk.startswith(b"<") or chunk.startswith(b"<!DOCTYPE"):
-                    logger.info("Audio URL returned HTML (anti-hotlinking), skipping download")
-                    return None
-                # Reset and re-download
-                r = requests.get(audio_url, timeout=30, headers=self.HEADERS, stream=True)
-                r.raise_for_status()
-
-            # Save to temp file
-            fd, fpath = tempfile.mkstemp(suffix=".mp3", prefix=f"music_{song_id}_")
-            with os.fdopen(fd, "wb") as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-
-            size_kb = os.path.getsize(fpath) / 1024
-            if size_kb < 10:
-                # Too small to be real audio
-                os.remove(fpath)
-                logger.info("Downloaded file too small (%.1f KB), likely not real audio", size_kb)
-                return None
-
-            logger.info("Downloaded audio: %s (%.1f KB)", fpath, size_kb)
-            return fpath
-        except Exception:
-            logger.exception("Failed to download audio for song_id=%s", song_id)
-            return None

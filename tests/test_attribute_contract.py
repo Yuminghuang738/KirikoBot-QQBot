@@ -90,6 +90,7 @@ def _allowed() -> dict[str, set[str]]:
         "QuoteInfo": _class_attrs(qq, "QuoteInfo"),
         "RobotServer": _class_attrs(rs, "RobotServer"),
         "QQOfficialClient": _class_attrs(qq, "QQOfficialClient"),
+        "MessageBuilder": _class_attrs(qq, "MessageBuilder"),
     }
 
 
@@ -186,3 +187,60 @@ def test_the_proactive_push_shims_stay_deleted():
     for dead in ("send_group_msg", "send_private_msg"):
         assert dead not in allowed["QQOfficialClient"], (
             f"client.{dead} 又回来了 —— 官方平台没有主动推送，这条路必定 400")
+
+
+def _message_builder_vars(source: str) -> set[str]:
+    """文件里所有被赋值为 `MessageBuilder()` 的变量名。
+
+    用「追踪变量」而不是「变量名以 builder 结尾」—— 后者会漏掉 `mb = MessageBuilder()`
+    这种写法，护栏就变成空转的了（第一版就是这么写的，植入 bug 都测不出来）。
+    """
+    return set(re.findall(r"(\w+)\s*=\s*MessageBuilder\(", source))
+
+
+def test_no_calls_to_nonexistent_message_builder_methods():
+    """凡是 `MessageBuilder` 实例上调用的方法，都必须是真实存在的段方法。
+
+    这条抓的是**同一次线上事故的第二个和第三个坑**：点歌工具里
+
+        music_builder.music(music_type, str(song_id))    # OneBot 的音乐卡片段
+        record_builder.record(audio_path)               # OneBot 的语音段
+
+    官方平台的 `MessageBuilder` 只有 text / image / at / reply —— 没有 music，
+    也没有 record。第一个直接在群里抛 `AttributeError`（用户看到「点歌有问题」），
+    第二个排在它后面，修好第一个就会立刻撞上。
+    """
+    allowed = _allowed()
+    builder_methods = allowed["MessageBuilder"]
+    assert {"text", "image", "at", "reply", "build"} <= builder_methods
+
+    problems: list[str] = []
+    for name in SCANNED_FILES:
+        src = (APP_DIR / name).read_text(encoding="utf-8")
+        vars_ = _message_builder_vars(src)
+        for lineno, line in enumerate(src.splitlines(), 1):
+            code = line.split("#", 1)[0]
+            # 直接链式：MessageBuilder().xxx(...)
+            for attr in re.findall(r"MessageBuilder\(\)\.(\w+)", code):
+                if attr not in builder_methods:
+                    problems.append(f"MessageBuilder().{attr}  ← {name}:{lineno}")
+            # 变量形式：mb.xxx(...)
+            for var, attr in re.findall(r"\b(\w+)\.(\w+)", code):
+                if var in vars_ and attr not in builder_methods:
+                    problems.append(f"{var}.{attr}  ← {name}:{lineno}")
+
+    assert not problems, (
+        "MessageBuilder 上没有这些段方法：\n" + "\n".join(f"  {p}" for p in problems)
+    )
+
+
+def test_the_onebot_segment_types_stay_gone():
+    """OneBot 的段类型不能在 MessageBuilder 上复活。
+
+    官方平台没有「段」的概念，只有 text / image，其余（音乐卡片、语音、@）
+    要么不存在（music/record），要么会被 `_plain_text` 丢弃（at）。
+    """
+    allowed = _allowed()
+    for dead in ("music", "record", "video", "file", "share", "json", "face", "poke"):
+        assert dead not in allowed["MessageBuilder"], (
+            f"MessageBuilder.{dead} 又回来了 —— 官方平台没有这个段类型")

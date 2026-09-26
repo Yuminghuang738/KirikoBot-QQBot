@@ -686,7 +686,6 @@ class MusicTool:
         artist = song_info.get("artist", "未知歌手")
         name = song_info.get("name", "未知歌曲")
         album = song_info.get("album", "")
-        music_type = song_info.get("music_type", "163")
 
         now = _time.time()
         dedup_key = f"{robot.group_id or robot.user_id}:{song_id}"
@@ -709,7 +708,6 @@ class MusicTool:
                     artist = alt.get("artist", "未知歌手")
                     name = alt.get("name", "未知歌曲")
                     album = alt.get("album", "")
-                    music_type = alt.get("music_type", "163")
                     dedup_key = alt_key
                     logger.info("Music dedup: using alternative '%s - %s'", name, artist)
                     break
@@ -731,38 +729,25 @@ class MusicTool:
             k: v for k, v in self._recent_keywords.items() if k in self._recent_songs
         }
 
-        # ── 1. Send song info text first ──
+        # ── 发送歌曲信息 ──
+        #
+        # 官方平台**没有音乐卡片**这个东西。OneBot 时代是靠 music 段
+        # （`{"type":"music","data":{"type":"163","id":...}}`）让 QQ 渲染出可播放的
+        # 卡片，而官方的 `MessageBuilder` 只有 text/image/at/reply 四种段，
+        # 富媒体上传也只认图片/视频/语音/文件四类 —— **音乐分享不在其中**。
+        #
+        # 也试过把下载到的 mp3 当语音发：官方要求语音必须是 **silk** 格式
+        # （见富媒体文档的「资源格式要求」），而网易云下到的是 mp3，转 silk 需要
+        # 额外的编码器，不划算。所以这里给**可点击的歌曲链接**，让它至少能听得到。
         info_lines = [f"🎵 {name}", f"👤 {artist}"]
         if album:
             info_lines.append(f"💿 {album}")
         info_lines.append("")
+        info_lines.append(f"🔗 https://music.163.com/#/song?id={song_id}")
 
-        # ── 2. Send music share card (QQ native music UI) ──
-        info_lines.append(f"🎧 正在播放，点击收听 ↑")
+        robot.send(MessageBuilder().text("\n".join(info_lines)).build())
 
-        info_builder = MessageBuilder()
-        info_builder.text("\n".join(info_lines))
-        robot.send(info_builder.build())
-
-        # Send the music share card — this renders as a beautiful playable card in QQ
-        music_builder = MessageBuilder()
-        music_builder.music(music_type, str(song_id))
-        robot.send(music_builder.build())
-
-        logger.info("Music shared: %s - %s (id=%s, type=%s)", name, artist, song_id, music_type)
-
-        # ── 3. Try audio download as bonus (best-effort) ──
-        try:
-            audio_path = self.service.download_audio(
-                song_info.get("audio_url", ""), song_id
-            )
-            if audio_path:
-                record_builder = MessageBuilder()
-                record_builder.record(audio_path)
-                robot.send(record_builder.build())
-                logger.info("Audio voice message also sent for %s - %s", name, artist)
-        except Exception:
-            logger.debug("ai_tools.music_search_call 忽略了异常", exc_info=True)
+        logger.info("Music shared: %s - %s (id=%s)", name, artist, song_id)
 
         _set_tool_meta(ai, tool_calls)
         ai.user_text = f"播放歌曲: {name} - {artist}"
